@@ -74,22 +74,53 @@ The user-facing flow:
 
 The MCP processes don't know about each other. The browser extension is the multiplexer that knows which agent controls which tab.
 
-### Example: Hermes calling a tool
+## Multi-tab per agent (v0.3.0+)
+
+A single agent can have **multiple browser tabs** bound to it, so a Hermes-style agent can drive Stripe in one tab and the inference provider dashboard in another, all from one MCP process. The LLM picks which tab to act on.
+
+### Tools for multi-tab work
+
+| Tool | Purpose |
+|---|---|
+| `browser_list_tabs` | List all bound tabs with their tabId, label, URL, active marker |
+| `browser_open_tab` | Open a new tab and bind it (optional `url`, `label`) |
+| `browser_close_tab` | Close a bound tab |
+| `browser_rename_tab` | Set a human-readable label on a tab |
+| `browser_set_active_tab` | Switch which tab unspecific tool calls route to |
+
+Every existing `browser_*` tool also accepts an optional `tabId` parameter. If omitted, the call routes to the agent's **active tab**.
+
+### Example: driving Stripe + OpenAI console from one agent
 
 ```
-LLM in Hermes session
-  -> tool call: browser_navigate(url="https://dashboard.stripe.com")
-  -> Hermes MCP process (port 9009, agent=hermes)
-  -> tool handler: context.sendSocketMessage("browser_navigate", {url: ...})
-  -> WS message to extension on /ws/hermes
-  -> Extension routes to the tab bound to "hermes"
-  -> Tab navigates
-  -> Result back through the same chain
+LLM: "I need to set up a Stripe webhook. Let me check what tabs are bound."
+  -> browser_list_tabs
+  -> response:
+      tabId=12345  label="Stripe dashboard"  url=https://dashboard.stripe.com
+      tabId=67890  label="OpenAI console"    url=https://platform.openai.com  ← ACTIVE
+
+LLM: "I should focus on Stripe first."
+  -> browser_set_active_tab(tabId=12345)
+
+LLM: "Let me take a snapshot of the Stripe dashboard."
+  -> browser_snapshot
+  -> response: full ARIA tree, refs like e1, e2, ... for the Stripe dashboard
+
+LLM: "Click 'Webhooks'."
+  -> browser_click(element="Webhooks link in sidebar", ref="e14")
+
+LLM: "Now switch to the OpenAI console and grab the API key."
+  -> browser_set_active_tab(tabId=67890)
+  -> browser_snapshot
+  -> browser_click(element="API keys", ref="e7")
 ```
 
-If OMP also calls `browser_navigate` to a different URL, it goes through the OMP MCP process (port 9010, agent=omp) → extension's `/ws/omp` endpoint → whichever tab is bound to OMP. No interference.
+### Multi-tab vs. multi-agent
 
----
+- **Multi-agent** = multiple MCP processes, one per agent (e.g. Hermes + OMP + Codex), each with its own port and WS endpoint
+- **Multi-tab** = within ONE agent's MCP process, multiple browser tabs are bound, with per-tab labels and an "active" tab for unspecific calls
+
+The two compose: spawn N MCP processes (multi-agent), each connects to the same browser with M tabs (multi-tab), and the LLM picks which `(agent, tab)` pair to drive for each tool call.
 
 ## Environment variables
 

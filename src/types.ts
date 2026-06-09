@@ -5,11 +5,30 @@
  * exposes. Inlined from @repo/types/mcp/tool so the project builds
  * standalone without the upstream monorepo.
  *
+ * v0.2.0+: every browser_* tool accepts an optional `tabId` parameter
+ * (number) for multi-tab routing. If omitted, the extension routes
+ * to the agent's active tab (or the first bound tab if no active
+ * is set).
+ *
  * Adding a new tool: add the Zod schema here, add it to the MCPTool
  * discriminated union, then wire it into the tools/* handlers.
  */
 
 import { z } from "zod";
+
+/**
+ * Optional tab selector. When omitted, the extension routes the
+ * tool call to the agent's active tab (or the first bound tab).
+ * Pass a specific tabId to target a particular bound tab.
+ */
+const TabIdParam = z
+  .number()
+  .int()
+  .positive()
+  .optional()
+  .describe(
+    "Optional tab ID to target. When omitted, routes to the agent's active tab. Use browser_list_tabs to see available tab IDs.",
+  );
 
 const ElementSchema = z.object({
   element: z
@@ -20,6 +39,7 @@ const ElementSchema = z.object({
   ref: z
     .string()
     .describe("Exact target element reference from the page snapshot"),
+  tabId: TabIdParam,
 });
 
 export const NavigateTool = z.object({
@@ -27,19 +47,20 @@ export const NavigateTool = z.object({
   description: z.literal("Navigate to a URL"),
   arguments: z.object({
     url: z.string().describe("The URL to navigate to"),
+    tabId: TabIdParam,
   }),
 });
 
 export const GoBackTool = z.object({
   name: z.literal("browser_go_back"),
   description: z.literal("Go back to the previous page"),
-  arguments: z.object({}),
+  arguments: z.object({ tabId: TabIdParam }),
 });
 
 export const GoForwardTool = z.object({
-  name: z.literal("Go forward to the next page"),
+  name: z.literal("browser_go_forward"),
   description: z.literal("Go forward to the next page"),
-  arguments: z.object({}),
+  arguments: z.object({ tabId: TabIdParam }),
 });
 
 export const WaitTool = z.object({
@@ -59,15 +80,16 @@ export const PressKeyTool = z.object({
       .describe(
         "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`",
       ),
+    tabId: TabIdParam,
   }),
 });
 
 export const SnapshotTool = z.object({
   name: z.literal("browser_snapshot"),
   description: z.literal(
-    "Capture accessibility snapshot of the current page. Use this for getting references to elements to interact with.",
+    "Capture accessibility snapshot of the current page. Use this for getting references to elements to interact with. The snapshot also lists all bound tabs so the LLM can pick a different tab via tabId on subsequent calls.",
   ),
-  arguments: z.object({}),
+  arguments: z.object({ tabId: TabIdParam }),
 });
 
 export const ClickTool = z.object({
@@ -96,6 +118,7 @@ export const DragTool = z.object({
     endRef: z
       .string()
       .describe("Exact target element reference from the page snapshot"),
+    tabId: TabIdParam,
   }),
 });
 
@@ -131,13 +154,79 @@ export const SelectOptionTool = z.object({
 export const ScreenshotTool = z.object({
   name: z.literal("browser_screenshot"),
   description: z.literal("Take a screenshot of the current page"),
-  arguments: z.object({}),
+  arguments: z.object({ tabId: TabIdParam }),
 });
 
 export const GetConsoleLogsTool = z.object({
   name: z.literal("browser_get_console_logs"),
   description: z.literal("Get the console logs from the browser"),
+  arguments: z.object({ tabId: TabIdParam }),
+});
+
+// ============================================================
+//  Multi-tab management tools (v0.2.0+)
+// ============================================================
+
+export const ListTabsTool = z.object({
+  name: z.literal("browser_list_tabs"),
+  description: z.literal(
+    "List all browser tabs bound to this agent. Returns tabId, label, URL, title, and which one is the agent's active tab. Use this to discover what's available before issuing tool calls that need a specific tab.",
+  ),
   arguments: z.object({}),
+});
+
+export const OpenTabTool = z.object({
+  name: z.literal("browser_open_tab"),
+  description: z.literal(
+    "Open a new browser tab and bind it to this agent. Optionally provide a URL (will navigate after open) and a human-readable label (the LLM uses the label to refer to the tab in subsequent calls). The new tab is set as the agent's active tab.",
+  ),
+  arguments: z.object({
+    url: z
+      .string()
+      .optional()
+      .describe("Optional URL to navigate to after the tab opens"),
+    label: z
+      .string()
+      .optional()
+      .describe(
+        "Human-readable label for this tab (e.g. 'Stripe dashboard', 'OpenAI console'). If omitted, the tab's hostname or title is used.",
+      ),
+  }),
+});
+
+export const CloseTabTool = z.object({
+  name: z.literal("browser_close_tab"),
+  description: z.literal(
+    "Close a browser tab previously bound to this agent. The tab's binding is automatically removed.",
+  ),
+  arguments: z.object({
+    tabId: z.number().int().positive().describe("Tab ID to close"),
+  }),
+});
+
+export const RenameTabTool = z.object({
+  name: z.literal("browser_rename_tab"),
+  description: z.literal(
+    "Set a human-readable label on a bound tab. The label is what the LLM uses to refer to the tab in conversation and in browser_list_tabs output.",
+  ),
+  arguments: z.object({
+    tabId: z.number().int().positive().describe("Tab ID to rename"),
+    label: z.string().describe("New label for the tab"),
+  }),
+});
+
+export const SetActiveTabTool = z.object({
+  name: z.literal("browser_set_active_tab"),
+  description: z.literal(
+    "Set which bound tab is the agent's active tab. Tool calls that don't specify a tabId route to the active tab. Use this to switch the agent's focus between bound tabs.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to make active. Must be bound to this agent."),
+  }),
 });
 
 export const MCPTool = z.discriminatedUnion("name", [
@@ -157,4 +246,10 @@ export const MCPTool = z.discriminatedUnion("name", [
   // Custom
   ScreenshotTool,
   GetConsoleLogsTool,
+  // Tab management
+  ListTabsTool,
+  OpenTabTool,
+  CloseTabTool,
+  RenameTabTool,
+  SetActiveTabTool,
 ]);
