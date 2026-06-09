@@ -34,3 +34,13 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# === Hermes / user-context-leak guards ===
+# The terminal tool's "subdirectory context discovery" can drop AGENTS.md,
+# llms.txt, and .agents/ into the working tree of a freshly-cloned repo.
+# These are the user's GLOBAL workflow files — they MUST NOT be committed
+# to a public repo. The .gitignore below blocks them by name in addition
+# to the upstream's defaults.
+AGENTS.md
+llms.txt
+.agents/
