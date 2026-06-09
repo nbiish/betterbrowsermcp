@@ -37,6 +37,7 @@ import { program } from "commander";
 import { appConfig, mcpConfig, wsUrlForAgent } from "@/config";
 import type { Resource } from "@/resources/resource";
 import { createServerWithTools } from "@/server";
+import * as clipboard from "@/tools/clipboard";
 import * as common from "@/tools/common";
 import * as custom from "@/tools/custom";
 import * as manage from "@/tools/manage";
@@ -69,6 +70,11 @@ const manageTools: Tool[] = [
   manage.setActiveTab,
 ];
 
+// Clipboard tool — reads "Click to copy" content from any page that
+// uses navigator.clipboard.writeText. Useful for Stripe publishable
+// keys, secret keys, GitHub PATs, AWS access keys, etc.
+const clipboardTools: Tool[] = [clipboard.copyToClipboard];
+
 const snapshotTools: Tool[] = [
   common.navigate(true),
   common.goBack(true),
@@ -81,6 +87,7 @@ const snapshotTools: Tool[] = [
   ...commonTools,
   ...customTools,
   ...manageTools,
+  ...clipboardTools,
 ];
 
 const resources: Resource[] = [];
