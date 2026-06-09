@@ -1,8 +1,15 @@
+/**
+ * @betterbrowsermcp/mcp — custom (non-snapshot) tools
+ *
+ * screenshot and getConsoleLogs — work directly on the current page
+ * without needing a snapshot ref.
+ */
+
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import { GetConsoleLogsTool, ScreenshotTool } from "@repo/types/mcp/tool";
+import { GetConsoleLogsTool, ScreenshotTool } from "@/types";
 
-import { Tool } from "./tool";
+import type { Tool } from "./tool";
 
 export const getConsoleLogs: Tool = {
   schema: {
@@ -15,7 +22,7 @@ export const getConsoleLogs: Tool = {
       "browser_get_console_logs",
       {},
     );
-    const text: string = consoleLogs
+    const text: string = (consoleLogs as any[])
       .map((log) => JSON.stringify(log))
       .join("\n");
     return {
@@ -39,7 +46,7 @@ export const screenshot: Tool = {
       content: [
         {
           type: "image",
-          data: screenshot,
+          data: String(screenshot ?? ""),
           mimeType: "image/png",
         },
       ],
