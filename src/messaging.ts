@@ -90,6 +90,12 @@ export type SocketMessageMap = {
   browser_set_active_tab: RequestPayload;
   // Clipboard (v0.4.0+)
   browser_copy_to_clipboard: RequestPayload;
+  // Extraction & SPA-state (v0.5.0+)
+  browser_paste_text: RequestPayload;
+  browser_wait_for_text: RequestPayload;
+  browser_get_attribute: RequestPayload;
+  browser_extract_text: RequestPayload;
+  browser_evaluate: RequestPayload;
 };
 
 /**

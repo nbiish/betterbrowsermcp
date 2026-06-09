@@ -14,10 +14,12 @@ are details.
 
 ## TL;DR
 
-`@nbiish/betterbrowsermcp` is a v0.3.0 Node.js MCP server that drives a
+`@nbiish/betterbrowsermcp` is a v0.5.0 Node.js MCP server that drives a
 real browser (Brave/Chrome) through an extension, with **multi-agent
-routing** and **multi-tab per agent**. It's a drop-in upgrade of
-`@browsermcp/mcp@0.1.3` with the bugs and rough edges fixed.
+routing**, **multi-tab per agent**, **click-to-copy value capture**,
+and **SPA-state extraction** (paste, wait-for-text, get-attribute,
+extract-text, evaluate). Drop-in upgrade of `@browsermcp/mcp@0.1.3`
+with the bugs and rough edges fixed.
 
 | Repo | What |
 |---|---|
@@ -40,7 +42,7 @@ BROWSER_MCP_AGENT_ID=hermes BROWSER_MCP_PORT=9109 mcp-server-browsermcp
 
 A drop-in upgrade of `@browsermcp/mcp@0.1.3` (the upstream
 single-process, single-tab browser automation MCP server) with
-two coordinated upgrades:
+four coordinated upgrades:
 
 1. **Multi-agent routing** (v0.2.0): one process per agent, each
    on its own port. No more `killProcessOnPort` murder between
@@ -53,6 +55,36 @@ two coordinated upgrades:
    `browser_open_tab`, `browser_close_tab`, `browser_rename_tab`,
    `browser_set_active_tab`). Every existing `browser_*` tool
    now accepts an optional `tabId` parameter.
+
+3. **"Click to copy" content capture** (v0.4.0): the content script
+   monkey-patches `navigator.clipboard.writeText` to capture the
+   value as the page writes it. The new `browser_copy_to_clipboard`
+   tool clicks a "Click to copy" button and returns the value in a
+   single round-trip (no race). Unlocks Stripe publishable keys /
+   secret keys, GitHub PATs, AWS access keys, and any other UI that
+   uses the modern Clipboard API.
+
+4. **SPA-state extraction** (v0.5.0): five new tools for the
+   friction that ARIA snapshots and blind `browser_wait(time)`
+   calls hit when driving real-world SPAs (Stripe dashboard, OpenAI
+   console, dashboards that swap content via fetch):
+   - `browser_paste_text` — paste a string into a focused element
+     using the React-friendly native-setter pattern (controlled
+     inputs accept the value, contenteditable uses
+     `execCommand('insertText')`).
+   - `browser_wait_for_text` — poll `document.body.innerText` for a
+     substring; replace blind sleeps. Returns a fresh snapshot on
+     match.
+   - `browser_get_attribute` — read a single HTML attribute by ref
+     (use `attr: 'href'` to extract a Stripe payment link from a
+     share button). Handles `value` on input/textarea correctly.
+   - `browser_extract_text` — read one element's `textContent` by
+     ref. Cheaper than a full snapshot.
+   - `browser_evaluate` — run an arbitrary JS expression in the
+     page's global scope via indirect eval. Escape hatch for React
+     state, computed styles, custom data attributes, third-party
+     widget internals. Output capped at 10KB, must be
+     JSON-serializable.
 
 ---
 

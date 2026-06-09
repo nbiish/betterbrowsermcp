@@ -247,6 +247,94 @@ export const CopyToClipboardTool = z.object({
   }),
 });
 
+// ============================================================
+//  Extraction & SPA-state tools (v0.5.0+)
+// ============================================================
+
+export const PasteTextTool = z.object({
+  name: z.literal("browser_paste_text"),
+  description: z.literal(
+    "Paste text into a focused element on the page. If `ref` is provided, that element is focused first; otherwise the currently focused element receives the paste. Counterpart to `browser_copy_to_clipboard` — copy a value with the copy tool, then paste it elsewhere. Dispatches a synthetic `paste` event (clipboardData.setData + 'insertFromPaste') so React/Vue/Angular controlled inputs accept the value. Use for Stripe webhook secret fields, generated API key fields, or any text you need to push into a form.",
+  ),
+  arguments: z.object({
+    text: z
+      .string()
+      .describe("The text to paste into the focused element"),
+    ref: z
+      .string()
+      .optional()
+      .describe(
+        "Optional element ref. If provided, the element is focused before the paste event is dispatched. If omitted, the currently focused element is used.",
+      ),
+    element: z
+      .string()
+      .optional()
+      .describe(
+        "Human-readable description of the target element (required if `ref` is set, for permission)",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const WaitForTextTool = z.object({
+  name: z.literal("browser_wait_for_text"),
+  description: z.literal(
+    "Wait for a specific text to appear anywhere in the page DOM (case-insensitive substring match). Polls every 500ms until the text is found or the timeout elapses. Replaces blind `browser_wait(time)` calls. Returns a fresh ARIA snapshot once the text appears. Use after clicking a submit button, or to wait for a Stripe dashboard to finish loading. On timeout, returns an error with the current page text length so you can diagnose what is or isn't rendering.",
+  ),
+  arguments: z.object({
+    text: z
+      .string()
+      .describe(
+        "The text (or substring) to wait for. Case-insensitive. Whitespace-normalized.",
+      ),
+    timeout: z
+      .number()
+      .optional()
+      .default(30)
+      .describe(
+        "Maximum seconds to wait. Default 30. Use 5-10 for fast SPAs, 60+ for dashboard loads.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const GetAttributeTool = z.object({
+  name: z.literal("browser_get_attribute"),
+  description: z.literal(
+    "Read a single HTML attribute from an element referenced by snapshot ref. Use `attr: 'href'` to get a link's URL (e.g. extract a Stripe payment link from a share button), `attr: 'value'` for current input values, `attr: 'aria-label'` for accessibility text, or any custom `data-*` attribute. Returns the attribute value as a string, or an empty string if the attribute is not set. Cheaper and more precise than a full snapshot when you need one specific value.",
+  ),
+  arguments: ElementSchema.extend({
+    attr: z
+      .string()
+      .describe(
+        "The HTML attribute name to read (e.g. 'href', 'value', 'aria-label', 'data-testid')",
+      ),
+  }),
+});
+
+export const ExtractTextTool = z.object({
+  name: z.literal("browser_extract_text"),
+  description: z.literal(
+    "Extract the `textContent` of a single element by ref. Cheaper than a full snapshot when you just need the visible text of one element. Returns the text as a plain string with whitespace normalized. Use to grab a heading, a status message, or a single field's value without paying the snapshot cost.",
+  ),
+  arguments: ElementSchema,
+});
+
+export const EvaluateTool = z.object({
+  name: z.literal("browser_evaluate"),
+  description: z.literal(
+    "Run an arbitrary JavaScript expression in the page's main frame context. Returns the JSON-serializable result. Escape hatch for when ARIA snapshots cannot introspect something — React/Vue component state, computed styles, custom data attributes, third-party widget internals, hidden DOM the snapshot can't reach. The result must be JSON-serializable and is capped at 10KB. The expression runs in the page's global scope via indirect eval (sees `window`, `document`, etc.) and any side effects DO persist — only call this with code you have reviewed.",
+  ),
+  arguments: z.object({
+    expression: z
+      .string()
+      .describe(
+        "JavaScript expression to evaluate. The last expression value is returned. Example: `document.querySelector('h1').textContent` or `Array.from(document.querySelectorAll('a')).map(a => a.href)`.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -272,4 +360,10 @@ export const MCPTool = z.discriminatedUnion("name", [
   SetActiveTabTool,
   // Clipboard
   CopyToClipboardTool,
+  // Extraction & SPA-state (v0.5.0+)
+  PasteTextTool,
+  WaitForTextTool,
+  GetAttributeTool,
+  ExtractTextTool,
+  EvaluateTool,
 ]);
