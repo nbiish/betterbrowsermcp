@@ -1,3 +1,10 @@
+/**
+ * @betterbrowsermcp/mcp — snapshot-based interactive tools
+ *
+ * Tools that operate on accessibility snapshot refs — click, hover,
+ * type, selectOption, drag, and the snapshot reader itself.
+ */
+
 import zodToJsonSchema from "zod-to-json-schema";
 
 import {
@@ -7,7 +14,7 @@ import {
   SelectOptionTool,
   SnapshotTool,
   TypeTool,
-} from "@repo/types/mcp/tool";
+} from "@/types";
 
 import type { Context } from "@/context";
 import { captureAriaSnapshot } from "@/utils/aria-snapshot";
@@ -83,7 +90,7 @@ export const hover: Tool = {
       content: [
         {
           type: "text",
-          text: `Hovered over "${validatedParams.element}"`,
+          text: `Hovered "${validatedParams.element}"`,
         },
         ...snapshot.content,
       ],
@@ -127,7 +134,7 @@ export const selectOption: Tool = {
       content: [
         {
           type: "text",
-          text: `Selected option in "${validatedParams.element}"`,
+          text: `Selected option(s) ${validatedParams.values.join(", ")} in "${validatedParams.element}"`,
         },
         ...snapshot.content,
       ],

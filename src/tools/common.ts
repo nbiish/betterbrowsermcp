@@ -1,3 +1,10 @@
+/**
+ * @betterbrowsermcp/mcp — common browser tools
+ *
+ * navigate, goBack, goForward, wait, pressKey — low-level browser
+ * navigation primitives that don't depend on ARIA snapshots.
+ */
+
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import {
@@ -6,7 +13,7 @@ import {
   NavigateTool,
   PressKeyTool,
   WaitTool,
-} from "@repo/types/mcp/tool";
+} from "@/types";
 
 import { captureAriaSnapshot } from "@/utils/aria-snapshot";
 
@@ -87,15 +94,8 @@ export const wait: Tool = {
   },
   handle: async (context, params) => {
     const { time } = WaitTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_wait", { time });
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Waited for ${time} seconds`,
-        },
-      ],
-    };
+    await new Promise((resolve) => setTimeout(resolve, time * 1000));
+    return captureAriaSnapshot(context, `Waited for ${time} seconds`);
   },
 };
 
@@ -108,13 +108,6 @@ export const pressKey: Tool = {
   handle: async (context, params) => {
     const { key } = PressKeyTool.shape.arguments.parse(params);
     await context.sendSocketMessage("browser_press_key", { key });
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Pressed key ${key}`,
-        },
-      ],
-    };
+    return captureAriaSnapshot(context, `Pressed key ${key}`);
   },
 };
