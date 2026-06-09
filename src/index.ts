@@ -40,6 +40,7 @@ import { createServerWithTools } from "@/server";
 import * as clipboard from "@/tools/clipboard";
 import * as common from "@/tools/common";
 import * as custom from "@/tools/custom";
+import * as extract from "@/tools/extract";
 import * as manage from "@/tools/manage";
 import * as snapshot from "@/tools/snapshot";
 import type { Tool } from "@/tools/tool";
@@ -75,6 +76,17 @@ const manageTools: Tool[] = [
 // keys, secret keys, GitHub PATs, AWS access keys, etc.
 const clipboardTools: Tool[] = [clipboard.copyToClipboard];
 
+// Extraction & SPA-state tools (v0.5.0+) — paste, wait_for_text,
+// get_attribute, extract_text, evaluate. See tools/extract.ts for
+// the per-tool rationale and failure-mode guidance.
+const extractTools: Tool[] = [
+  extract.pasteText,
+  extract.waitForText,
+  extract.getAttribute,
+  extract.extractText,
+  extract.evaluate,
+];
+
 const snapshotTools: Tool[] = [
   common.navigate(true),
   common.goBack(true),
@@ -88,6 +100,7 @@ const snapshotTools: Tool[] = [
   ...customTools,
   ...manageTools,
   ...clipboardTools,
+  ...extractTools,
 ];
 
 const resources: Resource[] = [];
