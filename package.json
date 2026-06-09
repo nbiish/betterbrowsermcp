@@ -1,5 +1,5 @@
 {
-  "name": "@betterbrowsermcp/mcp",
+  "name": "@nbiish/betterbrowsermcp",
   "version": "0.3.0",
   "description": "Better Browser MCP — multi-agent local browser automation with multi-tab support. Drop-in upgrade of @browsermcp/mcp with configurable ports, per-agent WebSocket paths, and no more port-9009 fighting between agents.",
   "author": "Nbiish",

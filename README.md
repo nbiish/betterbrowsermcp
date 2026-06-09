@@ -14,7 +14,7 @@
 
 ## What's different from `@browsermcp/mcp`?
 
-| | `@browsermcp/mcp@0.1.3` | `@betterbrowsermcp/mcp@0.2.0` |
+| | `@browsermcp/mcp@0.1.3` | `@nbiish/betterbrowsermcp@0.2.0` |
 |---|---|---|
 | Port collision behavior | Silently kills the other process (`lsof -ti:9009 \| xargs kill -9`) | Hard error, process exits with clear message |
 | Multiple agents on one machine | Each MCP process fights for the same port | Each agent runs on its own port — no fighting |
@@ -34,7 +34,7 @@ All `browser_navigate`, `browser_click`, `browser_snapshot`, etc. tool names are
 ### Single agent (one process, one browser)
 
 ```bash
-npx @betterbrowsermcp/mcp@latest
+npx @nbiish/betterbrowsermcp@latest
 # or, from this checkout:
 npm install
 npm run build
@@ -48,15 +48,15 @@ The server binds port 9009, WebSocket at `ws://127.0.0.1:9009/ws/default`. The b
 ```bash
 # Agent "hermes" on port 9009
 BROWSER_MCP_AGENT_ID=hermes BROWSER_MCP_PORT=9009 \
-  npx @betterbrowsermcp/mcp@latest &
+  npx @nbiish/betterbrowsermcp@latest &
 
 # Agent "omp" on port 9010
 BROWSER_MCP_AGENT_ID=omp BROWSER_MCP_PORT=9010 \
-  npx @betterbrowsermcp/mcp@latest &
+  npx @nbiish/betterbrowsermcp@latest &
 
 # Agent "codex" on port 9011
 BROWSER_MCP_AGENT_ID=codex BROWSER_MCP_PORT=9011 \
-  npx @betterbrowsermcp/mcp@latest &
+  npx @nbiish/betterbrowsermcp@latest &
 ```
 
 Each process binds its own port. They never fight. The browser extension connects to all three WebSocket endpoints and lets the user bind each tab to a specific agent.

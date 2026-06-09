@@ -10,6 +10,32 @@ betterbrowsermcp project. Read this first. Other docs
 (`README.md`, `reference/ARCHITECTURE.md`, individual source files)
 are details.
 
+---
+
+## TL;DR
+
+`@nbiish/betterbrowsermcp` is a v0.3.0 Node.js MCP server that drives a
+real browser (Brave/Chrome) through an extension, with **multi-agent
+routing** and **multi-tab per agent**. It's a drop-in upgrade of
+`@browsermcp/mcp@0.1.3` with the bugs and rough edges fixed.
+
+| Repo | What |
+|---|---|
+| `nbiish/betterbrowsermcp` | The MCP server (this repo) |
+| `nbiish/betterbrowsermcp-extension` | Chrome MV3 extension (companion) |
+
+```bash
+# Install
+npm install -g @nbiish/betterbrowsermcp@latest
+# Or use the local build
+node /path/to/betterbrowsermcp/dist/index.js
+
+# Run with one env var per agent
+BROWSER_MCP_AGENT_ID=hermes BROWSER_MCP_PORT=9109 mcp-server-browsermcp
+```
+
+---
+
 ## What this is
 
 A drop-in upgrade of `@browsermcp/mcp@0.1.3` (the upstream
@@ -28,9 +54,7 @@ two coordinated upgrades:
    `browser_set_active_tab`). Every existing `browser_*` tool
    now accepts an optional `tabId` parameter.
 
-Two repos:
-- `nbiish/betterbrowsermcp` — **this repo** (the MCP server, ESM Node)
-- `nbiish/betterbrowsermcp-extension` — the Chrome MV3 extension
+---
 
 ## Real-world driver: website portfolio monetization
 
@@ -54,6 +78,8 @@ actual browser, so the user's real passkey credentials work. The
 upstream had this capability but the multi-agent / port-fight bugs
 made it unreliable for a multi-agent setup (which is required to
 drive multiple sites in parallel).
+
+---
 
 ## Architecture at a glance
 
@@ -83,29 +109,35 @@ For the vendored upstream source (frozen at v0.1.3), see
 **`reference/upstream/`** — useful for diffing changes or
 understanding the original design.
 
-## Current state
+---
 
-| Repo | develop | main |
-|---|---|---|
-| `nbiish/betterbrowsermcp` (this) | v0.3.0 with multi-tab routing ✓ | v0.2.0 (pre-multi-tab) — promote after validation |
-| `nbiish/betterbrowsermcp-extension` | v0.2.0 with content script + multi-tab UI | v0.3.0 with multi-tab ✓ |
+## Current state (v0.3.0)
 
-The develop branch is the **integration surface**. The main branch
-is the **release surface**. Until develop → main promotion, the
-release branch is one version behind.
+| Repo | main | develop | npm |
+|---|---|---|---|
+| `nbiish/betterbrowsermcp` | v0.3.0 ✓ | v0.3.0 ✓ | `@nbiish/betterbrowsermcp@0.3.0` |
+| `nbiish/betterbrowsermcp-extension` | v0.3.0 ✓ | v0.3.0 ✓ | _not published yet_ |
 
-For the extension side: `nbiish/betterbrowsermcp-extension` is
-already on v0.3.0 on main (the user promoted it manually after
-multi-tab testing).
+Both repos are on main at v0.3.0 with the full multi-tab surface
+and the documentation set.
+
+---
 
 ## How to use
 
 ### Build & run (one process per agent)
 
 ```bash
+# Local build
+git clone https://github.com/nbiish/betterbrowsermcp.git
+cd betterbrowsermcp
 npm install
 npm run build
 BROWSER_MCP_AGENT_ID=hermes BROWSER_MCP_PORT=9109 node dist/index.js
+
+# Or after npm publish
+npm install -g @nbiish/betterbrowsermcp@latest
+BROWSER_MCP_AGENT_ID=hermes BROWSER_MCP_PORT=9109 mcp-server-browsermcp
 ```
 
 ### Configure in Hermes
@@ -126,7 +158,14 @@ mcp_servers:
 Then add `betterbrowsermcp` to `platform_toolsets.cli` (and
 `platform_toolsets.telegram` if you also use that platform). The
 MCP tools will be exposed under the `mcp_betterbrowsermcp_*`
-prefix once `/reload-mcp` runs.
+prefix once `/reload-mcp` runs (or on the next fresh session).
+
+> **Hermes quirk (gotcha):** MCP server tools are REGISTERED with
+> the registry at startup, but NOT EXPOSED to the LLM unless the
+> server name is in `platform_toolsets.<your-platform>`. Default
+> `cli` includes `browser`, `clarify`, `code_execution`, etc.
+> but NOT your custom MCP servers. Add the new server name and
+> `/reload-mcp` (or start a fresh session).
 
 ### Connect the browser
 
@@ -168,6 +207,46 @@ LLM: "Now go to OpenAI."
 The LLM never specifies `tabId` for routine work — it just
 manages active tab focus and calls the standard tools.
 
+---
+
+## Tool reference (v0.3.0)
+
+### Standard browser tools (with optional `tabId`)
+
+| Tool | Purpose |
+|---|---|
+| `browser_navigate` | Navigate to a URL |
+| `browser_click` | Click an element by snapshot ref |
+| `browser_type` | Type text into an editable element |
+| `browser_hover` | Hover over an element |
+| `browser_select_option` | Select option(s) in a `<select>` |
+| `browser_press_key` | Press a keyboard key |
+| `browser_snapshot` | Capture ARIA tree with refs |
+| `browser_screenshot` | Capture visible tab as PNG |
+| `browser_get_console_logs` | Get page console logs |
+| `browser_go_back` / `browser_go_forward` | History navigation |
+| `browser_wait` | Sleep N seconds |
+| `browser_drag` | Drag from one ref to another |
+
+### Multi-tab management tools (v0.3.0+)
+
+| Tool | Purpose |
+|---|---|
+| `browser_list_tabs` | List bound tabs with labels + active marker |
+| `browser_open_tab` | Open a new tab and bind it |
+| `browser_close_tab` | Close a bound tab |
+| `browser_rename_tab` | Set a human-readable label |
+| `browser_set_active_tab` | Switch the active tab for unspecific calls |
+
+### Response format
+
+Every `browser_*` tool result includes `(tab: <label> [<tabId>])`
+where applicable, so the LLM always knows which tab the call
+landed on. ARIA snapshots embed a "Bound tabs for this agent"
+block listing every available tab.
+
+---
+
 ## Environment variables
 
 | Var | Default | Purpose |
@@ -179,6 +258,8 @@ manages active tab focus and calls the standard tools.
 | `BROWSER_MCP_WS_PATH_PREFIX` | `/ws` | WS path prefix. Final endpoint: `ws://host:port/ws/<agentId>` |
 | `BROWSER_MCP_AGENT_SEPARATOR` | `__` | Tool name separator (e.g. `hermes__browser_navigate`) |
 | `BROWSER_MCP_NO_KILL_PORT` | `true` | Refuse to silently kill other processes on port collision |
+
+---
 
 ## Source layout
 
@@ -213,10 +294,12 @@ betterbrowsermcp/
 │   │   ├── src/                upstream source (frozen, for diffing)
 │   │   └── LICENSE             upstream Apache-2.0
 │   └── diagrams/               (ascii art for the protocol flows)
-└── .gitignore                  node_modules/, dist/, AGENTS.md, llms.txt, .agents/
+└── .gitignore                  node_modules/, dist/, .agents/
 ```
 
-## Critical workflow notes
+---
+
+## Critical workflow notes (gotchas hit during v0.3.0 dev)
 
 1. **Never work on `main`.** All development on `develop` (or
    feature branches off `develop`). Promote develop → main only
@@ -230,21 +313,51 @@ betterbrowsermcp/
 3. **`/reload-mcp` after config changes.** When you update
    `~/.hermes/config.yaml` (add a new MCP server, change env vars,
    update platform_toolsets), the running gateway needs a reload
-   to pick up the changes. `/reload-mcp` in-session, or restart
-   the gateway for fresh sessions.
+   to pick up the changes. `/reload-mcp` in the TUI input box
+   (NOT the terminal), or restart the gateway for fresh sessions.
 
 4. **Hermes's built-in `browser` toolset (Camofox-backed) takes
    precedence over MCP tools with colliding names.** If you see
    `browser_navigate` in the available list but not
    `mcp_betterbrowsermcp_browser_navigate`, the built-in is
-   winning the name collision. The fix: ensure
-   `betterbrowsermcp` is in `platform_toolsets.cli` (we
-   discovered this during the v0.3.0 release).
+   winning the name collision. Fix: add `betterbrowsermcp` to
+   `platform_toolsets.cli`. We discovered this during the v0.3.0
+   release.
 
-5. **Stripe passkey auth requires the real browser session.**
+5. **`/reload-mcp` re-spawns MCP children but does NOT re-inject
+   the LLM's system prompt.** A toolset config change only takes
+   effect for FRESH conversations. If the new tools don't appear
+   in the active LLM, start a new conversation.
+
+6. **Orphan v0.3.0 servers on port 9109 will block `/reload-mcp`.**
+   If you ran `node dist/index.js` for testing and forgot to
+   kill it, the Hermes-spawned child fails to bind. The
+   mcp-stderr.log shows "Port 9109 is already in use". Fix:
+   `kill <orphan-pid>` (NOT `pkill` — Hermes blocks `pkill`).
+
+7. **Stripe passkey auth requires the real browser session.**
    The extension drives the user's actual Chrome — the user's
    passkey credentials work. Headless-style tools that bypass
    the browser session won't satisfy Stripe's WebAuthn.
+
+8. **Content scripts don't re-inject on already-open tabs.** When
+   you update the extension's content.js, the running tab still
+   has the old content script. Refresh the page (Cmd+R or
+   `Cmd+Shift+R` for hard reload) to pick up the new version.
+
+9. **The MCP server's snapshot/press_key/select_option/get_console_logs
+   were silently broken in v0.3.0 because of a case-name mismatch
+   in the content script.** Fixed in v0.3.0 patch — content
+   script now normalizes via `stripBrowserPrefix(msg.type)`. The
+   symptom was: snapshot returned `undefined` and tools silently
+   fell through to the default error branch. The fix is on
+   main at commit `b5ff9c2`.
+
+10. **Screenshot needs `host_permissions: ["<all_urls>"]`.** The
+    default was localhost-only, which broke `captureVisibleTab`
+    on HTTPS sites like Stripe. Fixed in the same commit.
+
+---
 
 ## Why this exists (the war story)
 
@@ -263,8 +376,16 @@ betterbrowsermcp is the v0.3.0+ answer to all three. See
 `reference/ARCHITECTURE.md` for the full before/after and
 `README.md` for user-facing docs.
 
+---
+
 ## Related repos
 
 - `nbiish/betterbrowsermcp-extension` — the Chrome MV3 extension
 - `BrowserMCP/mcp` (upstream) — `https://github.com/BrowserMCP/mcp`
 - `BrowserMCP/extension` (upstream ext) — `https://github.com/BrowserMCP/extension`
+
+---
+
+## License
+
+Apache-2.0 (same as upstream)
