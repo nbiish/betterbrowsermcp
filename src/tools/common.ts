@@ -3,6 +3,13 @@
  *
  * navigate, goBack, goForward, wait, pressKey — low-level browser
  * navigation primitives that don't depend on ARIA snapshots.
+ *
+ * v0.2.0+: every tool forwards the optional `tabId` to the
+ * extension, which routes the call to the correct tab. The
+ * extension's response may include the resolved `tabId` and
+ * `label` of the tab that was actually used; we surface those
+ * in the tool result text so the LLM can confirm which tab
+ * got operated on.
  */
 
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -19,6 +26,18 @@ import { captureAriaSnapshot } from "@/utils/aria-snapshot";
 
 import type { Tool, ToolFactory } from "./tool";
 
+/** Stringify the {tabId, label} suffix that the extension returns,
+ *  so the LLM always knows which tab the call landed on. */
+function tabSuffix(meta: any): string {
+  if (!meta) return "";
+  if (meta.label && meta.tabId !== undefined) {
+    return ` (tab: ${meta.label} [${meta.tabId}])`;
+  }
+  if (meta.tabId !== undefined) return ` (tab ${meta.tabId})`;
+  if (meta.label) return ` (tab: ${meta.label})`;
+  return "";
+}
+
 export const navigate: ToolFactory = (snapshot) => ({
   schema: {
     name: NavigateTool.shape.name.value,
@@ -26,16 +45,20 @@ export const navigate: ToolFactory = (snapshot) => ({
     inputSchema: zodToJsonSchema(NavigateTool.shape.arguments),
   },
   handle: async (context, params) => {
-    const { url } = NavigateTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_navigate", { url });
+    const { url, tabId } = NavigateTool.shape.arguments.parse(params);
+    const result = (await context.sendSocketMessage("browser_navigate", {
+      url,
+      tabId,
+    })) as any;
     if (snapshot) {
-      return captureAriaSnapshot(context);
+      const snap = await captureAriaSnapshot(context, tabId);
+      return snap;
     }
     return {
       content: [
         {
           type: "text",
-          text: `Navigated to ${url}`,
+          text: `Navigated to ${url}${tabSuffix(result)}`,
         },
       ],
     };
@@ -48,16 +71,19 @@ export const goBack: ToolFactory = (snapshot) => ({
     description: GoBackTool.shape.description.value,
     inputSchema: zodToJsonSchema(GoBackTool.shape.arguments),
   },
-  handle: async (context) => {
-    await context.sendSocketMessage("browser_go_back", {});
+  handle: async (context, params) => {
+    const { tabId } = GoBackTool.shape.arguments.parse(params);
+    const result = (await context.sendSocketMessage("browser_go_back", {
+      tabId,
+    })) as any;
     if (snapshot) {
-      return captureAriaSnapshot(context);
+      return captureAriaSnapshot(context, tabId);
     }
     return {
       content: [
         {
           type: "text",
-          text: "Navigated back",
+          text: `Navigated back${tabSuffix(result)}`,
         },
       ],
     };
@@ -70,16 +96,19 @@ export const goForward: ToolFactory = (snapshot) => ({
     description: GoForwardTool.shape.description.value,
     inputSchema: zodToJsonSchema(GoForwardTool.shape.arguments),
   },
-  handle: async (context) => {
-    await context.sendSocketMessage("browser_go_forward", {});
+  handle: async (context, params) => {
+    const { tabId } = GoForwardTool.shape.arguments.parse(params);
+    const result = (await context.sendSocketMessage("browser_go_forward", {
+      tabId,
+    })) as any;
     if (snapshot) {
-      return captureAriaSnapshot(context);
+      return captureAriaSnapshot(context, tabId);
     }
     return {
       content: [
         {
           type: "text",
-          text: "Navigated forward",
+          text: `Navigated forward${tabSuffix(result)}`,
         },
       ],
     };
@@ -95,7 +124,7 @@ export const wait: Tool = {
   handle: async (context, params) => {
     const { time } = WaitTool.shape.arguments.parse(params);
     await new Promise((resolve) => setTimeout(resolve, time * 1000));
-    return captureAriaSnapshot(context, `Waited for ${time} seconds`);
+    return captureAriaSnapshot(context, undefined, `Waited for ${time} seconds`);
   },
 };
 
@@ -106,8 +135,8 @@ export const pressKey: Tool = {
     inputSchema: zodToJsonSchema(PressKeyTool.shape.arguments),
   },
   handle: async (context, params) => {
-    const { key } = PressKeyTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_press_key", { key });
-    return captureAriaSnapshot(context, `Pressed key ${key}`);
+    const { key, tabId } = PressKeyTool.shape.arguments.parse(params);
+    await context.sendSocketMessage("browser_press_key", { key, tabId });
+    return captureAriaSnapshot(context, tabId, `Pressed key ${key}`);
   },
 };

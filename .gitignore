@@ -36,11 +36,13 @@ yarn-error.log*
 *.pem
 
 # === Hermes / user-context-leak guards ===
-# The terminal tool's "subdirectory context discovery" can drop AGENTS.md,
-# llms.txt, and .agents/ into the working tree of a freshly-cloned repo.
-# These are the user's GLOBAL workflow files — they MUST NOT be committed
-# to a public repo. The .gitignore below blocks them by name in addition
-# to the upstream's defaults.
-AGENTS.md
-llms.txt
+# The terminal tool's "subdirectory context discovery" can drop
+# AGENTS.md, llms.txt, and .agents/ into the working tree of a
+# freshly-cloned repo (the user's GLOBAL workflow files). We block
+# .agents/ wholesale. AGENTS.md and llms.txt are intentionally
+# NOT blocked — this repo has its own AGENTS.md and llms.txt as
+# project documentation. To avoid accidentally committing a
+# Hermes-injected copy, audit staged files before each commit and
+# verify the AGENTS.md / llms.txt content matches the repo's own
+# authoring (not the user's ~/.hermes/ templates).
 .agents/

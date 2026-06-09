@@ -39,6 +39,7 @@ import type { Resource } from "@/resources/resource";
 import { createServerWithTools } from "@/server";
 import * as common from "@/tools/common";
 import * as custom from "@/tools/custom";
+import * as manage from "@/tools/manage";
 import * as snapshot from "@/tools/snapshot";
 import type { Tool } from "@/tools/tool";
 import { createWebSocketServer } from "@/ws";
@@ -57,6 +58,17 @@ const commonTools: Tool[] = [common.pressKey, common.wait];
 
 const customTools: Tool[] = [custom.getConsoleLogs, custom.screenshot];
 
+// Multi-tab management tools — always registered, regardless of whether
+// the user has bound any tabs yet. The LLM uses these to discover the
+// available tabs, set the active one, and label them.
+const manageTools: Tool[] = [
+  manage.listTabs,
+  manage.openTab,
+  manage.closeTab,
+  manage.renameTab,
+  manage.setActiveTab,
+];
+
 const snapshotTools: Tool[] = [
   common.navigate(true),
   common.goBack(true),
@@ -68,6 +80,7 @@ const snapshotTools: Tool[] = [
   snapshot.selectOption,
   ...commonTools,
   ...customTools,
+  ...manageTools,
 ];
 
 const resources: Resource[] = [];
