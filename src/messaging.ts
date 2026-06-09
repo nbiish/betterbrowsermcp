@@ -66,7 +66,7 @@ export type AuthPayload = {
  * they'll be type-checked at every call site.
  */
 export type SocketMessageMap = {
-  // Requests server -> extension
+  // Requests server -> extension (DOM tools, v0.1.x)
   browser_navigate: RequestPayload;
   browser_go_back: RequestPayload;
   browser_go_forward: RequestPayload;
@@ -82,6 +82,12 @@ export type SocketMessageMap = {
   browser_drag: RequestPayload;
   getUrl: RequestPayload;
   getTitle: RequestPayload;
+  // Tab management (v0.2.0+)
+  browser_list_tabs: RequestPayload;
+  browser_open_tab: RequestPayload;
+  browser_close_tab: RequestPayload;
+  browser_rename_tab: RequestPayload;
+  browser_set_active_tab: RequestPayload;
 };
 
 /**

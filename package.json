@@ -1,7 +1,7 @@
 {
   "name": "@betterbrowsermcp/mcp",
-  "version": "0.2.0",
-  "description": "Better Browser MCP \u2014 multi-agent local browser automation with WS path routing, configurable port, and no port-9009 fighting between agents",
+  "version": "0.3.0",
+  "description": "Better Browser MCP — multi-agent local browser automation with multi-tab support. Drop-in upgrade of @browsermcp/mcp with configurable ports, per-agent WebSocket paths, and no more port-9009 fighting between agents.",
   "author": "Nbiish",
   "homepage": "https://github.com/nbiish/betterbrowsermcp",
   "bugs": {

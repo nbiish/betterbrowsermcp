@@ -3,6 +3,10 @@
  *
  * Tools that operate on accessibility snapshot refs — click, hover,
  * type, selectOption, drag, and the snapshot reader itself.
+ *
+ * v0.2.0+: tabId passes through to the extension. The element
+ * schema's tabId is forwarded in the WS message; the extension
+ * routes to that tab (or the active tab if absent).
  */
 
 import zodToJsonSchema from "zod-to-json-schema";
@@ -27,8 +31,14 @@ export const snapshot: Tool = {
     description: SnapshotTool.shape.description.value,
     inputSchema: zodToJsonSchema(SnapshotTool.shape.arguments),
   },
-  handle: async (context: Context) => {
-    return await captureAriaSnapshot(context);
+  handle: async (context: Context, params) => {
+    const { tabId } = SnapshotTool.shape.arguments.parse(params);
+    // When no tabId specified, the extension returns the active
+    // tab's snapshot. When tabId is provided, the snapshot is
+    // taken on that specific tab. We pass tabId through to
+    // captureAriaSnapshot so it also routes the trailing
+    // getUrl/getTitle calls to the same tab.
+    return await captureAriaSnapshot(context, tabId);
   },
 };
 
@@ -41,7 +51,10 @@ export const click: Tool = {
   handle: async (context: Context, params) => {
     const validatedParams = ClickTool.shape.arguments.parse(params);
     await context.sendSocketMessage("browser_click", validatedParams);
-    const snapshot = await captureAriaSnapshot(context);
+    const snapshot = await captureAriaSnapshot(
+      context,
+      validatedParams.tabId,
+    );
     return {
       content: [
         {
@@ -63,7 +76,10 @@ export const drag: Tool = {
   handle: async (context: Context, params) => {
     const validatedParams = DragTool.shape.arguments.parse(params);
     await context.sendSocketMessage("browser_drag", validatedParams);
-    const snapshot = await captureAriaSnapshot(context);
+    const snapshot = await captureAriaSnapshot(
+      context,
+      validatedParams.tabId,
+    );
     return {
       content: [
         {
@@ -85,7 +101,10 @@ export const hover: Tool = {
   handle: async (context: Context, params) => {
     const validatedParams = HoverTool.shape.arguments.parse(params);
     await context.sendSocketMessage("browser_hover", validatedParams);
-    const snapshot = await captureAriaSnapshot(context);
+    const snapshot = await captureAriaSnapshot(
+      context,
+      validatedParams.tabId,
+    );
     return {
       content: [
         {
@@ -107,7 +126,10 @@ export const type: Tool = {
   handle: async (context: Context, params) => {
     const validatedParams = TypeTool.shape.arguments.parse(params);
     await context.sendSocketMessage("browser_type", validatedParams);
-    const snapshot = await captureAriaSnapshot(context);
+    const snapshot = await captureAriaSnapshot(
+      context,
+      validatedParams.tabId,
+    );
     return {
       content: [
         {
@@ -129,7 +151,10 @@ export const selectOption: Tool = {
   handle: async (context: Context, params) => {
     const validatedParams = SelectOptionTool.shape.arguments.parse(params);
     await context.sendSocketMessage("browser_select_option", validatedParams);
-    const snapshot = await captureAriaSnapshot(context);
+    const snapshot = await captureAriaSnapshot(
+      context,
+      validatedParams.tabId,
+    );
     return {
       content: [
         {
