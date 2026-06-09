@@ -88,6 +88,8 @@ export type SocketMessageMap = {
   browser_close_tab: RequestPayload;
   browser_rename_tab: RequestPayload;
   browser_set_active_tab: RequestPayload;
+  // Clipboard (v0.4.0+)
+  browser_copy_to_clipboard: RequestPayload;
 };
 
 /**

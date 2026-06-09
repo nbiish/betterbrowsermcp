@@ -229,6 +229,24 @@ export const SetActiveTabTool = z.object({
   }),
 });
 
+export const CopyToClipboardTool = z.object({
+  name: z.literal("browser_copy_to_clipboard"),
+  description: z.literal(
+    "Click a 'Click to copy' button on the page and return the value the page wrote to the clipboard. Use this for Stripe's publishable key / secret key copy buttons, GitHub PAT copy buttons, AWS access key copy buttons, and any other 'click to copy' UI patterns. The content script patches navigator.clipboard.writeText to capture the value as it is written, then returns it to the LLM.\n\nThe returned value is plain text (the literal content of the copy button). For secret material, the LLM should pipe it to the user's PQC secrets store (e.g. via the pqc-secrets CLI) rather than persisting it in chat history or unencrypted state.",
+  ),
+  arguments: z.object({
+    element: z
+      .string()
+      .describe(
+        "Human-readable element description used to obtain permission to interact with the element",
+      ),
+    ref: z
+      .string()
+      .describe("Exact target element reference from the page snapshot"),
+    tabId: TabIdParam,
+  }),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -252,4 +270,6 @@ export const MCPTool = z.discriminatedUnion("name", [
   CloseTabTool,
   RenameTabTool,
   SetActiveTabTool,
+  // Clipboard
+  CopyToClipboardTool,
 ]);
