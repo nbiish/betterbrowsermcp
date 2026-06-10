@@ -60,6 +60,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { copyFile, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -73,6 +74,7 @@ import {
   SecretsCopyToPageTool,
   SecretsGetTool,
   SecretsListTool,
+  SecretsRotateTool,
   SecretsLoadTool,
   SecretsLockAgentTool,
   SecretsStatusTool,
@@ -771,7 +773,167 @@ export const secretsCopyToPage: Tool = {
 };
 
 /* ------------------------------------------------------------------ *
- *  Aggregate export
+ *  browser_secrets_rotate — re-encrypt the bundle with a fresh
+ *  data key + KEM shared secret. Identity key in keychain stays.
+ * ------------------------------------------------------------------ */
+
+import { createHash } from "node:crypto";
+
+async function bundleFingerprint(path: string): Promise<string> {
+  const buf = await readFile(path);
+  const h = createHash("sha3-256").update(buf).digest("hex");
+  return `sha3:${h}`;
+}
+
+export const secretsRotate: Tool = {
+  schema: {
+    name: SecretsRotateTool.shape.name.value,
+    description: SecretsRotateTool.shape.description.value,
+    inputSchema: zodToJsonSchema(SecretsRotateTool.shape.arguments),
+  },
+  handle: async (_context, params) => {
+    SecretsRotateTool.shape.arguments.parse(params);
+    if (!existsSync(PQC_BUNDLE_PATH)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No bundle at ${PQC_BUNDLE_PATH}. Nothing to rotate.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    // 1. Capture old fingerprint for the audit message.
+    const oldFp = await bundleFingerprint(PQC_BUNDLE_PATH);
+
+    // 2. Backup the existing bundle. Use UTC timestamp for the
+    //    suffix to keep backups sortable and avoid name collisions.
+    const utcStamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = `${PQC_BUNDLE_PATH}.bak.${utcStamp}`;
+    try {
+      await copyFile(PQC_BUNDLE_PATH, backupPath);
+    } catch (e: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Failed to back up existing bundle before rotate: ` +
+              `${e?.message || String(e)}\nRotate aborted.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 3. Read all existing secrets via export (decrypts with the
+    //    CURRENT data key).
+    let secrets: ParsedSecret[];
+    try {
+      const { stdout } = await pqc(["export"]);
+      secrets = parseExport(stdout);
+    } catch (e: any) {
+      // Restore backup if we couldn't read the current bundle.
+      try {
+        await copyFile(backupPath, PQC_BUNDLE_PATH);
+      } catch {
+        // best effort
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Failed to read existing bundle before rotate: ` +
+              `${e?.stderr || e?.message || String(e)}\n` +
+              `Backup preserved at ${backupPath}.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 4. Re-pack with a fresh data key + KEM shared secret.
+    //    pack always generates fresh randomness, so the bundle
+    //    is effectively re-keyed. The recipient pubkey (and its
+    //    private key in the keychain) is unchanged.
+    const stdinPayload = secrets
+      .map((s) => `${s.name}=${s.value}`)
+      .join("\n");
+
+    try {
+      const { spawn } = await import("node:child_process");
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(PQC_SECRETS_BIN, ["pack"], {
+          env: {
+            ...process.env,
+            PQC_KEYCHAIN_ACCOUNT:
+              process.env.PQC_KEYCHAIN_ACCOUNT || "pqc-secrets-key",
+          },
+        });
+        let stderr = "";
+        child.stderr.on("data", (d) => (stderr += d.toString()));
+        child.on("close", (code) => {
+          if (code === 0) resolve();
+          else
+            reject(
+              new Error(
+                `pqc-secrets pack exited ${code}: ${stderr || "<no stderr>"}`,
+              ),
+            );
+        });
+        child.on("error", reject);
+        child.stdin.write(stdinPayload);
+        child.stdin.end();
+      });
+    } catch (e: any) {
+      // Restore the backup on pack failure.
+      try {
+        await copyFile(backupPath, PQC_BUNDLE_PATH);
+      } catch {
+        // If restore failed, the .bak is still on disk for manual recovery.
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Rotate failed during re-pack: ` +
+              `${e?.stderr || e?.message || String(e)}\n` +
+              `Original bundle restored from ${backupPath}.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 5. Capture new fingerprint and report.
+    const newFp = await bundleFingerprint(PQC_BUNDLE_PATH);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Rotated PQC bundle.\n` +
+            `Old fingerprint: ${oldFp}\n` +
+            `New fingerprint: ${newFp}\n` +
+            `Previous bundle backed up to ${backupPath} (retain for 7 days, then ` +
+            `delete with: rm ${backupPath}).\n` +
+            `${secrets.length} secret(s) re-encrypted with a fresh data key and a ` +
+            `fresh ML-KEM-768 shared secret. The identity keypair in the ` +
+            `keychain is unchanged.\n\n` +
+            `(Audit logging is added in v0.8.0 step 2.4 — this event is not ` +
+            `yet appended to ~/.config/pqc-secrets/audit.log.)`,
+        },
+      ],
+    };
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ *  tool array
  * ------------------------------------------------------------------ */
 
 export const secretsTools: Tool[] = [
@@ -784,4 +946,5 @@ export const secretsTools: Tool[] = [
   secretsUnlockAgent,
   secretsLockAgent,
   secretsCopyToPage,
+  secretsRotate,
 ];

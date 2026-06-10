@@ -557,6 +557,37 @@ export const ClearInputTool = z.object({
   }),
 });
 
+/**
+ * v0.8.0+ — rotate the bundle's data key.
+ *
+ * Re-encrypts the entire bundle with a fresh random AES-256-GCM
+ * data key and a fresh ML-KEM-768 shared secret (via encaps
+ * against the existing recipient public key). The long-term
+ * ML-KEM-768 identity key in the keychain is NOT changed.
+ *
+ * Use this:
+ *   - on a schedule (e.g., quarterly) as part of key hygiene
+ *   - after a suspected exposure of a transient key (e.g., a
+ *     copy of a decrypted value briefly sitting in process memory
+ *     that you want to be conservative about)
+ *   - after migrating the bundle format
+ *
+ * Does NOT change the identity keypair. The same recipient
+ * pubkey in the keychain can still decrypt the new bundle.
+ *
+ * For a full identity rotation (re-keygen, all consumers must
+ * re-encrypt under the new pubkey), see the runbook at
+ * ~/.agents/skills/pqc-secrets/references/rotation-procedure.md
+ * §6.2 — that is an out-of-band ceremony, not a v0.8.0 MCP tool.
+ */
+export const SecretsRotateTool = z.object({
+  name: z.literal("browser_secrets_rotate"),
+  description: z.literal(
+    "Rotate the PQC bundle: re-encrypts all secrets with a fresh data key + KEM shared secret. The identity ML-KEM-768 keypair in the keychain stays the same. The audit log records one 'rotate' event with the bundle's old + new SHA3-256 fingerprints. The previous bundle is preserved as secrets.bundle.json.bak.<UTC> for a 7-day grace period.",
+  ),
+  arguments: z.object({}),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -601,4 +632,5 @@ export const MCPTool = z.discriminatedUnion("name", [
   SecretsUnlockAgentTool,
   SecretsLockAgentTool,
   SecretsCopyToPageTool,
+  SecretsRotateTool,
 ]);
