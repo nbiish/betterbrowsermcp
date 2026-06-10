@@ -466,7 +466,7 @@ export const secretsAdd: Tool = {
     inputSchema: zodToJsonSchema(SecretsAddTool.shape.arguments),
   },
   handle: async (_context, params) => {
-    const { name, value, merge } = SecretsAddTool.shape.arguments.parse(params);
+    const { name, value, merge, dry_run } = SecretsAddTool.shape.arguments.parse(params);
     try {
       // Read existing secrets first (unless we want to replace the
       // entire bundle, in which case `merge: false`).
@@ -478,7 +478,35 @@ export const secretsAdd: Tool = {
       // existing entry of the same name.
       const map: Record<string, string> = {};
       for (const e of existing) map[e.name] = e.value;
+      const wasExisting = name in map;
+      const previousValue = map[name];
       map[name] = value;
+
+      // dry_run: compute diff and return without writing. This is
+      // safe-by-default — no real change to the bundle.
+      if (dry_run) {
+        const added = merge && !wasExisting ? 1 : 0;
+        const modified = merge && wasExisting && previousValue !== value ? 1 : 0;
+        const unchanged = merge && wasExisting && previousValue === value ? 1 : 0;
+        const preview = merge
+          ? (wasExisting
+              ? `Modified existing "${name}" (length ${previousValue!.length} -> ${value.length})`
+              : `Added new "${name}" (length ${value.length})`)
+          : `Would REPLACE entire bundle with just "${name}" (${Object.keys(map).length} existing secrets would be wiped)`;
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `DRY RUN — no changes written.\n` +
+                `Action: ${preview}\n` +
+                `Diff: +${added} added, ~${modified} modified, =${unchanged} unchanged\n` +
+                `Resulting bundle would have ${Object.keys(map).length} secret(s).\n\n` +
+                `Re-run with dry_run=false (or omit it) to actually write.`,
+            },
+          ],
+        };
+      }
 
       // Re-encrypt the entire bundle via `pack`. The `pack`
       // command takes KEY=VALUE lines on stdin, encrypted with the

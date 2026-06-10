@@ -417,6 +417,13 @@ export const SecretsAddTool = z.object({
       .describe(
         "If true (default), keep existing secrets and add/update this one. If false, REPLACE the entire bundle with just this one secret — destructive.",
       ),
+    dry_run: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "If true, do not write to the real bundle. The tool reads the existing bundle, computes the diff (added/modified counts and a preview), and returns the diff without making any change. Use this to preview the impact of an add before committing to it.",
+      ),
   }),
 });
 
