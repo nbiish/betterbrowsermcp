@@ -372,6 +372,13 @@ export const SecretsGetTool = z.object({
       .describe(
         "Exact secret name (case-sensitive). Use browser_secrets_list to discover names.",
       ),
+    mode: z
+      .enum(["plain", "redact"])
+      .default("plain")
+      .optional()
+      .describe(
+        "Response mode. 'plain' (default) returns the raw value. 'redact' returns a length-only summary (e.g. '<redacted: STRIPE_SECRET length=107>') for LLM summary work. The audit log records every read.",
+      ),
   }),
 });
 

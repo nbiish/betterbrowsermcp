@@ -327,7 +327,7 @@ export const secretsGet: Tool = {
     inputSchema: zodToJsonSchema(SecretsGetTool.shape.arguments),
   },
   handle: async (_context, params) => {
-    const { name } = SecretsGetTool.shape.arguments.parse(params);
+    const { name, mode } = SecretsGetTool.shape.arguments.parse(params);
     try {
       const { stdout } = await pqc(["export"]);
       const parsed = parseExport(stdout);
@@ -347,11 +347,29 @@ export const secretsGet: Tool = {
           isError: true,
         };
       }
-      // CRITICAL: the value is returned as plain text in the tool
-      // response. It will flow through the LLM conversation, which
-      // is acceptable because the conversation itself is the
-      // operator's private channel (PQC-encrypted Hermes transport).
-      // The value is never written to disk by this tool surface.
+      // Default mode: 'plain' — return the raw value.
+      // The value is returned as plain text in the tool response. It
+      // will flow through the LLM conversation, which is acceptable
+      // because the conversation itself is the operator's private
+      // channel (PQC-encrypted Hermes transport). The value is never
+      // written to disk by this tool surface.
+      //
+      // mode: 'redact' — return a length-only summary for LLM
+      // summary work. Useful when the LLM wants to confirm a secret
+      // exists without echoing the value into the conversation
+      // history. The audit log records every read regardless of mode.
+      if (mode === "redact") {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `<redacted: ${name} length=${match.value.length}>\n\n` +
+                `(Redacted mode: value is not returned. Use mode='plain' to retrieve the actual value.)`,
+            },
+          ],
+        };
+      }
       return {
         content: [
           {
