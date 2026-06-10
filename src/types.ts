@@ -335,6 +335,137 @@ export const EvaluateTool = z.object({
   }),
 });
 
+// ============================================================
+//  PQC secrets integration (v0.7.0+)
+//
+//  These tools wrap the `pqc-secrets` CLI (FIPS 203 ML-KEM-768 +
+//  AES-256-GCM) so the LLM can read, list, and add secrets to
+//  the PQC bundle at ~/.config/pqc-secrets/secrets.bundle.json
+//  and pipe values into form fields via the existing paste_text
+//  transport. See src/tools/secrets.ts for full architecture notes.
+// ============================================================
+
+export const SecretsStatusTool = z.object({
+  name: z.literal("browser_secrets_status"),
+  description: z.literal(
+    "Report PQC bundle health: binary path, bundle path + mtime, keychain reachability, count of secrets, secret names. Returns plain READY/NOT READY verdict. Use this first to verify the pqc-secrets stack is wired before calling get/list/add.",
+  ),
+  arguments: z.object({}),
+});
+
+export const SecretsListTool = z.object({
+  name: z.literal("browser_secrets_list"),
+  description: z.literal(
+    "List all secret names in the PQC bundle. Does NOT return values — use browser_secrets_get for that. Failures usually mean macOS is blocking the pqc-secrets binary's keychain access (user must approve the prompt).",
+  ),
+  arguments: z.object({}),
+});
+
+export const SecretsGetTool = z.object({
+  name: z.literal("browser_secrets_get"),
+  description: z.literal(
+    "Decrypt and return the value of one secret from the PQC bundle. Returns plain text — handle with care. For ongoing use across many tool calls in the same session, prefer browser_secrets_unlock_agent so the value lives in the server's process memory rather than the conversation history.",
+  ),
+  arguments: z.object({
+    name: z
+      .string()
+      .describe(
+        "Exact secret name (case-sensitive). Use browser_secrets_list to discover names.",
+      ),
+  }),
+});
+
+export const SecretsLoadTool = z.object({
+  name: z.literal("browser_secrets_load"),
+  description: z.literal(
+    "Load secrets into the page's window scope as a frozen read-only object at `window.__bbmcpSecrets__`. Fires a CustomEvent('bbmcp:secrets-loaded') the page can listen for. Does NOT trigger any paste event — pages that want to use a value must read it from window.__bbmcpSecrets__ explicitly. Useful when the page itself needs API access (e.g. a JS-driven form).",
+  ),
+  arguments: z.object({
+    names: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Optional list of secret names to load. If omitted, all secrets are loaded.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const SecretsAddTool = z.object({
+  name: z.literal("browser_secrets_add"),
+  description: z.literal(
+    "Add or update one secret in the PQC bundle. Re-encrypts the entire bundle atomically. By default merges with existing secrets (merge=true); pass merge=false to REPLACE the entire bundle. Use the latter only if you're sure you want to wipe existing entries — the user will be asked to confirm in v0.7.1.",
+  ),
+  arguments: z.object({
+    name: z
+      .string()
+      .describe("Secret name (case-sensitive; the env var name on export)."),
+    value: z
+      .string()
+      .describe("Secret value. Will be AES-256-GCM encrypted at rest."),
+    merge: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        "If true (default), keep existing secrets and add/update this one. If false, REPLACE the entire bundle with just this one secret — destructive.",
+      ),
+  }),
+});
+
+export const SecretsAddFromClipboardTool = z.object({
+  name: z.literal("browser_secrets_add_from_clipboard"),
+  description: z.literal(
+    "Add a secret to the PQC bundle using the current system clipboard contents as the value. Use this after a user has selected/copied a key from a dashboard (Stripe, GitHub, etc.) and wants to store it encrypted. NOTE: v0.7.0 ships as a stub — the full implementation needs a small extension-side clipboard read handler; scheduled for v0.7.1.",
+  ),
+  arguments: z.object({
+    name: z
+      .string()
+      .describe("Secret name to add/update with the clipboard value."),
+  }),
+});
+
+export const SecretsUnlockAgentTool = z.object({
+  name: z.literal("browser_secrets_unlock_agent"),
+  description: z.literal(
+    "Mark a secret as 'unlocked' for a specific tab. The value is cached in the MCP server's process memory (not the OS clipboard, not the page). Subsequent browser_secrets_copy_to_page calls for the same tab can use the cached value without going through browser_secrets_get (which exposes the value in the conversation history). Clear with browser_secrets_lock_agent.",
+  ),
+  arguments: z.object({
+    name: z
+      .string()
+      .describe("Secret name to unlock for this tab's session."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const SecretsLockAgentTool = z.object({
+  name: z.literal("browser_secrets_lock_agent"),
+  description: z.literal(
+    "Clear the unlocked-secrets cache for a tab. Pass `name` to lock just one secret, or omit to clear all unlocked secrets for the tab. Also called automatically when the tab is closed.",
+  ),
+  arguments: z.object({
+    tabId: TabIdParam,
+    name: z
+      .string()
+      .optional()
+      .describe(
+        "If set, only this secret is cleared. If omitted, all unlocked secrets for the tab are cleared.",
+      ),
+  }),
+});
+
+export const SecretsCopyToPageTool = z.object({
+  name: z.literal("browser_secrets_copy_to_page"),
+  description: z.literal(
+    "Atomic: read a secret from the PQC bundle (or from the unlocked cache) and paste it into a form field on the page. Uses the existing browser_paste_text transport so it works on React-controlled inputs (the v0.6.0 valueTracker reset). The secret value flows server-side straight to the content script — it does NOT pass through the conversation history.",
+  ),
+  arguments: ElementSchema.extend({
+    name: z
+      .string()
+      .describe("Secret name to paste into the field."),
+  }),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -366,4 +497,14 @@ export const MCPTool = z.discriminatedUnion("name", [
   GetAttributeTool,
   ExtractTextTool,
   EvaluateTool,
+  // PQC secrets integration (v0.7.0+)
+  SecretsStatusTool,
+  SecretsListTool,
+  SecretsGetTool,
+  SecretsLoadTool,
+  SecretsAddTool,
+  SecretsAddFromClipboardTool,
+  SecretsUnlockAgentTool,
+  SecretsLockAgentTool,
+  SecretsCopyToPageTool,
 ]);
