@@ -14,12 +14,14 @@ are details.
 
 ## TL;DR
 
-`@nbiish/betterbrowsermcp` is a v0.5.0 Node.js MCP server that drives a
+`@nbiish/betterbrowsermcp` is a v0.8.0 Node.js MCP server that drives a
 real browser (Brave/Chrome) through an extension, with **multi-agent
 routing**, **multi-tab per agent**, **click-to-copy value capture**,
-and **SPA-state extraction** (paste, wait-for-text, get-attribute,
-extract-text, evaluate). Drop-in upgrade of `@browsermcp/mcp@0.1.3`
-with the bugs and rough edges fixed.
+**SPA-state extraction**, **React-friendly form input**, and
+**PQC secrets management** (10 `browser_secrets_*` tools backed by
+ML-KEM-768 + AES-256-GCM, with append-only audit log).
+Drop-in upgrade of `@browsermcp/mcp@0.1.3` with the bugs and rough
+edges fixed.
 
 | Repo | What |
 |---|---|
@@ -143,15 +145,20 @@ understanding the original design.
 
 ---
 
-## Current state (v0.3.0)
+## Current state (v0.8.0)
 
 | Repo | main | develop | npm |
 |---|---|---|---|
-| `nbiish/betterbrowsermcp` | v0.3.0 ✓ | v0.3.0 ✓ | `@nbiish/betterbrowsermcp@0.3.0` |
-| `nbiish/betterbrowsermcp-extension` | v0.3.0 ✓ | v0.3.0 ✓ | _not published yet_ |
+| `nbiish/betterbrowsermcp` | v0.8.0 ✓ | v0.8.0 ✓ | `@nbiish/betterbrowsermcp@0.8.0` |
+| `nbiish/betterbrowsermcp-extension` | v0.6.0 ✓ | v0.6.0 ✓ | _not published yet_ |
 
-Both repos are on main at v0.3.0 with the full multi-tab surface
-and the documentation set.
+Both repos are on main: betterbrowsermcp ships v0.8.0 (multi-tab
++ SPA-state + React-friendly form input + PQC secrets with audit
+log); betterbrowsermcp-extension ships v0.6.0 (content script
+with setInputValue + clearInput matching the MCP-server side).
+No v0.7.0 extension work needed — the secrets work is server-side;
+the extension receives loaded secrets via `window.__bbmcpSecrets__`
++ the `bbmcp:secrets-loaded` CustomEvent.
 
 ---
 
@@ -269,6 +276,55 @@ manages active tab focus and calls the standard tools.
 | `browser_close_tab` | Close a bound tab |
 | `browser_rename_tab` | Set a human-readable label |
 | `browser_set_active_tab` | Switch the active tab for unspecific calls |
+
+### React-friendly form input (v0.6.0+)
+
+| Tool | Purpose |
+|---|---|
+| `browser_set_input_value` | Set value of an input/textarea/contenteditable with full React-friendly semantics (resets React's valueTracker so controlled inputs accept the value) |
+| `browser_clear_input` | Clear an input the React-friendly way; use before setInputValue when stale content exists |
+
+### PQC secrets management (v0.7.0+) + audit log (v0.8.0+)
+
+The 10 `browser_secrets_*` tools wrap the `pqc-secrets` Rust CLI
+(FIPS 203 ML-KEM-768 + AES-256-GCM). The bundle is at
+`~/.config/pqc-secrets/secrets.bundle.json` (safe to commit —
+every value is AES-256-GCM ciphertext). The ML-KEM-768 private
+key lives in the macOS Keychain under `service=pqc-secrets,
+account=pqc-secrets-key`. Override with `PQC_KEYCHAIN_ACCOUNT`.
+
+| Tool | Purpose |
+|---|---|
+| `browser_secrets_status` | Report bundle health, keychain reachability, count, names |
+| `browser_secrets_list` | List secret names (no values) |
+| `browser_secrets_get` | Return one secret's value. `mode: 'plain'\|'redact'` — plain default, redact returns length-only summary |
+| `browser_secrets_load` | Load secrets into the page's `window.__bbmcpSecrets__` scope + fire `bbmcp:secrets-loaded` CustomEvent |
+| `browser_secrets_add` | Add or update a secret. `merge: true\|false` (default true). `dry_run: true` for a preview without writing |
+| `browser_secrets_add_from_clipboard` | Add using system clipboard contents as the value |
+| `browser_secrets_unlock_agent` | Cache a secret in process memory for a specific tab (avoids re-decrypting on every paste) |
+| `browser_secrets_lock_agent` | Clear the unlocked cache for a tab (single name or all) |
+| `browser_secrets_copy_to_page` | Atomic: read + paste into a form field, server-side straight to content script (no conversation history) |
+| `browser_secrets_rotate` | Re-encrypt the bundle with a fresh data key + KEM shared secret. Identity key in keychain stays. Auto-backs up the previous bundle to `secrets.bundle.json.bak.<UTC>`. |
+
+**Audit log (v0.8.0+):** every secret operation appends a line to
+`~/.config/pqc-secrets/audit.log` at mode 0o600. Format is
+tab-separated:
+`<utc-ts>\t<actor>\t<action>\tname=...\tmode=...\ttab=...\t<detail>`.
+The value itself is never logged — only the first 16 hex chars
+of its SHA3-256 fingerprint, enough to verify "same value is
+in the bundle" without exposing the value. Example:
+```
+2026-06-10T15:24:49Z hermes add name=BBMCP_TEST_KEY mode=- tab=- merge=true; total=14; value-fp=sha3:549ab3b879785c99
+2026-06-10T15:25:12Z hermes get name=BBMCP_TEST_KEY mode=plain tab=- value-fp=sha3:549ab3b879785c99
+```
+
+**Design directive: availability first.** These tools are
+designed to be called freely by agents with no human-in-the-loop
+gatekeeping. No auth tokens, no redaction-by-default, no
+required `tabId` for non-browser-context operations. The
+verification surface is the audit log + the rotate tool's
+auto-backup. See `~/.agents/skills/pqc-secrets/SKILL.md` for
+the full PQC skills reference.
 
 ### Response format
 

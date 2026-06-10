@@ -60,10 +60,12 @@
  */
 
 import { execFile } from "node:child_process";
+import { copyFile, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { logAuditEvent, valueFingerprint } from "../audit";
 
 import { zodToJsonSchema } from "zod-to-json-schema";
 
@@ -73,6 +75,7 @@ import {
   SecretsCopyToPageTool,
   SecretsGetTool,
   SecretsListTool,
+  SecretsRotateTool,
   SecretsLoadTool,
   SecretsLockAgentTool,
   SecretsStatusTool,
@@ -327,7 +330,7 @@ export const secretsGet: Tool = {
     inputSchema: zodToJsonSchema(SecretsGetTool.shape.arguments),
   },
   handle: async (_context, params) => {
-    const { name } = SecretsGetTool.shape.arguments.parse(params);
+    const { name, mode } = SecretsGetTool.shape.arguments.parse(params);
     try {
       const { stdout } = await pqc(["export"]);
       const parsed = parseExport(stdout);
@@ -347,11 +350,41 @@ export const secretsGet: Tool = {
           isError: true,
         };
       }
-      // CRITICAL: the value is returned as plain text in the tool
-      // response. It will flow through the LLM conversation, which
-      // is acceptable because the conversation itself is the
-      // operator's private channel (PQC-encrypted Hermes transport).
-      // The value is never written to disk by this tool surface.
+      // Default mode: 'plain' — return the raw value.
+      // The value is returned as plain text in the tool response. It
+      // will flow through the LLM conversation, which is acceptable
+      // because the conversation itself is the operator's private
+      // channel (PQC-encrypted Hermes transport). The value is never
+      // written to disk by this tool surface.
+      //
+      // mode: 'redact' — return a length-only summary for LLM
+      // summary work. Useful when the LLM wants to confirm a secret
+      // exists without echoing the value into the conversation
+      // history. The audit log records every read regardless of mode.
+      if (mode === "redact") {
+        // Audit: even a redact-mode read is recorded.
+        logAuditEvent({ action: "get", mode: "redact", name });
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `<redacted: ${name} length=${match.value.length}>\n\n` +
+                `(Redacted mode: value is not returned. Use mode='plain' to retrieve the actual value.)`,
+            },
+          ],
+        };
+      }
+      // Audit: log the get event with the value's fingerprint, never
+      // the value itself. This lets the user verify "yes, the same
+      // value is in the bundle" without exposing the value to anyone
+      // reading the log.
+      logAuditEvent({
+        action: "get",
+        mode: "plain",
+        name,
+        detail: `value-fp=${valueFingerprint(match.value)}`,
+      });
       return {
         content: [
           {
@@ -448,7 +481,7 @@ export const secretsAdd: Tool = {
     inputSchema: zodToJsonSchema(SecretsAddTool.shape.arguments),
   },
   handle: async (_context, params) => {
-    const { name, value, merge } = SecretsAddTool.shape.arguments.parse(params);
+    const { name, value, merge, dry_run } = SecretsAddTool.shape.arguments.parse(params);
     try {
       // Read existing secrets first (unless we want to replace the
       // entire bundle, in which case `merge: false`).
@@ -460,20 +493,48 @@ export const secretsAdd: Tool = {
       // existing entry of the same name.
       const map: Record<string, string> = {};
       for (const e of existing) map[e.name] = e.value;
+      const wasExisting = name in map;
+      const previousValue = map[name];
       map[name] = value;
 
-      // Re-encrypt the entire bundle via `pack`. The `pack`
-      // command takes KEY=VALUE lines on stdin, encrypted with the
-      // recipient pubkey, and writes a new bundle (overwriting).
+      // dry_run: compute diff and return without writing. This is
+      // safe-by-default — no real change to the bundle.
+      if (dry_run) {
+        const added = merge && !wasExisting ? 1 : 0;
+        const modified = merge && wasExisting && previousValue !== value ? 1 : 0;
+        const unchanged = merge && wasExisting && previousValue === value ? 1 : 0;
+        const preview = merge
+          ? (wasExisting
+              ? `Modified existing "${name}" (length ${previousValue!.length} -> ${value.length})`
+              : `Added new "${name}" (length ${value.length})`)
+          : `Would REPLACE entire bundle with just "${name}" (${Object.keys(map).length} existing secrets would be wiped)`;
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `DRY RUN — no changes written.\n` +
+                `Action: ${preview}\n` +
+                `Diff: +${added} added, ~${modified} modified, =${unchanged} unchanged\n` +
+                `Resulting bundle would have ${Object.keys(map).length} secret(s).\n\n` +
+                `Re-run with dry_run=false (or omit it) to actually write.`,
+            },
+          ],
+        };
+      }
+
+      // Build the stdin payload for `pack` — KEY=VALUE lines,
+      // one per secret, separated by newlines. pack will AES-256-GCM
+      // encrypt the payload with a fresh data key + KEM shared
+      // secret, then atomic-rename over the bundle file.
       const stdinPayload = Object.entries(map)
         .map(([k, v]) => `${k}=${v}`)
         .join("\n");
-      await pqc(["pack"]);
 
-      // execFile with stdin requires manual piping — let's use the
-      // sync path or a child process with stdin. Switch to spawn
-      // pattern here. (We re-implement with a fresh execFile call
-      // that passes the payload via stdin.)
+      // Pack with a fresh data key + KEM shared secret.
+      // pack always generates fresh randomness, so the bundle
+      // is effectively re-keyed. The recipient pubkey (and its
+      // private key in the keychain) is unchanged.
       const { spawn } = await import("node:child_process");
       await new Promise<void>((resolve, reject) => {
         const child = spawn(PQC_SECRETS_BIN, ["pack"], {
@@ -499,6 +560,13 @@ export const secretsAdd: Tool = {
         child.stdin.end();
       });
 
+      // Audit: record the add with the value's fingerprint, never
+      // the value itself.
+      logAuditEvent({
+        action: merge ? "add" : "add",
+        name,
+        detail: `merge=${merge}; total=${Object.keys(map).length}; value-fp=${valueFingerprint(value)}`,
+      });
       return {
         content: [
           {
@@ -525,6 +593,22 @@ export const secretsAdd: Tool = {
 
 /* ------------------------------------------------------------------ *
  *  browser_secrets_add_from_clipboard
+ *  ------------------------------------------------------------------
+ *
+ *  No tabId required (intentionally). Per the availability-first
+ *  design directive, secrets-management operations that do not
+ *  directly interact with a browser tab (add, rotate, list, get,
+ *  status) do NOT require a tabId. Agents that drive secrets
+ *  from non-browser contexts (cron jobs, setup scripts, MCP
+ *  server boot, etc.) can call these tools without ceremony.
+ *
+ *  The safety surface is the audit log (every op recorded with
+ *  name + fingerprint) + the rotate tool's automatic backup
+ *  before re-encrypting. If a destructive op goes wrong, the
+ *  user can grep the audit log and restore from a backup.
+ *
+ *  Per-tab operations (unlock, lock, copy_to_page) DO require
+ *  tabId — it's the cache key / paste target, not a gate.
  * ------------------------------------------------------------------ */
 
 export const secretsAddFromClipboard: Tool = {
@@ -589,6 +673,13 @@ export const secretsUnlockAgent: Tool = {
       }
       const u = getUnlocked(tabId);
       u[name] = match.value;
+      // Audit: record the unlock with the value's fingerprint.
+      logAuditEvent({
+        action: "unlock",
+        name,
+        tabId,
+        detail: `value-fp=${valueFingerprint(match.value)}`,
+      });
       return {
         content: [
           {
@@ -626,6 +717,7 @@ export const secretsLockAgent: Tool = {
     if (name) {
       const u = getUnlocked(tabId);
       delete u[name];
+      logAuditEvent({ action: "lock", name, tabId });
       return {
         content: [
           { type: "text", text: `Locked secret "${name}" for tab ${tabId}.` },
@@ -633,6 +725,7 @@ export const secretsLockAgent: Tool = {
       };
     }
     clearUnlocked(tabId);
+    logAuditEvent({ action: "lock", tabId, detail: "all-unlocked-cleared" });
     return {
       content: [
         {
@@ -702,6 +795,12 @@ export const secretsCopyToPage: Tool = {
     })) as any;
 
     if (!result || !result.ok) {
+      logAuditEvent({
+        action: "copy_to_page",
+        name,
+        tabId,
+        error: result?.error || "unknown",
+      });
       return {
         content: [
           {
@@ -712,6 +811,14 @@ export const secretsCopyToPage: Tool = {
         isError: true,
       };
     }
+    // Audit: record the successful paste. value-fp lets the user
+    // verify the pasted value matches what's in the bundle.
+    logAuditEvent({
+      action: "copy_to_page",
+      name,
+      tabId,
+      detail: `value-fp=${valueFingerprint(value)}; ref=${ref ?? "-"}`,
+    });
     return {
       content: [
         {
@@ -725,7 +832,171 @@ export const secretsCopyToPage: Tool = {
 };
 
 /* ------------------------------------------------------------------ *
- *  Aggregate export
+ *  browser_secrets_rotate — re-encrypt the bundle with a fresh
+ *  data key + KEM shared secret. Identity key in keychain stays.
+ * ------------------------------------------------------------------ */
+
+import { createHash } from "node:crypto";
+
+async function bundleFingerprint(path: string): Promise<string> {
+  const buf = await readFile(path);
+  const h = createHash("sha3-256").update(buf).digest("hex");
+  return `sha3:${h}`;
+}
+
+export const secretsRotate: Tool = {
+  schema: {
+    name: SecretsRotateTool.shape.name.value,
+    description: SecretsRotateTool.shape.description.value,
+    inputSchema: zodToJsonSchema(SecretsRotateTool.shape.arguments),
+  },
+  handle: async (_context, params) => {
+    SecretsRotateTool.shape.arguments.parse(params);
+    if (!existsSync(PQC_BUNDLE_PATH)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No bundle at ${PQC_BUNDLE_PATH}. Nothing to rotate.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    // 1. Capture old fingerprint for the audit message.
+    const oldFp = await bundleFingerprint(PQC_BUNDLE_PATH);
+
+    // 2. Backup the existing bundle. Use UTC timestamp for the
+    //    suffix to keep backups sortable and avoid name collisions.
+    const utcStamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = `${PQC_BUNDLE_PATH}.bak.${utcStamp}`;
+    try {
+      await copyFile(PQC_BUNDLE_PATH, backupPath);
+    } catch (e: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Failed to back up existing bundle before rotate: ` +
+              `${e?.message || String(e)}\nRotate aborted.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 3. Read all existing secrets via export (decrypts with the
+    //    CURRENT data key).
+    let secrets: ParsedSecret[];
+    try {
+      const { stdout } = await pqc(["export"]);
+      secrets = parseExport(stdout);
+    } catch (e: any) {
+      // Restore backup if we couldn't read the current bundle.
+      try {
+        await copyFile(backupPath, PQC_BUNDLE_PATH);
+      } catch {
+        // best effort
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Failed to read existing bundle before rotate: ` +
+              `${e?.stderr || e?.message || String(e)}\n` +
+              `Backup preserved at ${backupPath}.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 4. Re-pack with a fresh data key + KEM shared secret.
+    //    pack always generates fresh randomness, so the bundle
+    //    is effectively re-keyed. The recipient pubkey (and its
+    //    private key in the keychain) is unchanged.
+    const stdinPayload = secrets
+      .map((s) => `${s.name}=${s.value}`)
+      .join("\n");
+
+    try {
+      const { spawn } = await import("node:child_process");
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(PQC_SECRETS_BIN, ["pack"], {
+          env: {
+            ...process.env,
+            PQC_KEYCHAIN_ACCOUNT:
+              process.env.PQC_KEYCHAIN_ACCOUNT || "pqc-secrets-key",
+          },
+        });
+        let stderr = "";
+        child.stderr.on("data", (d) => (stderr += d.toString()));
+        child.on("close", (code) => {
+          if (code === 0) resolve();
+          else
+            reject(
+              new Error(
+                `pqc-secrets pack exited ${code}: ${stderr || "<no stderr>"}`,
+              ),
+            );
+        });
+        child.on("error", reject);
+        child.stdin.write(stdinPayload);
+        child.stdin.end();
+      });
+    } catch (e: any) {
+      // Restore the backup on pack failure.
+      try {
+        await copyFile(backupPath, PQC_BUNDLE_PATH);
+      } catch {
+        // If restore failed, the .bak is still on disk for manual recovery.
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Rotate failed during re-pack: ` +
+              `${e?.stderr || e?.message || String(e)}\n` +
+              `Original bundle restored from ${backupPath}.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 5. Capture new fingerprint and report.
+    const newFp = await bundleFingerprint(PQC_BUNDLE_PATH);
+
+    // Audit: record the rotate event with both fingerprints.
+    logAuditEvent({
+      action: "rotate",
+      detail: `old=${oldFp}; new=${newFp}; count=${secrets.length}; backup=${backupPath}`,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Rotated PQC bundle.\n` +
+            `Old fingerprint: ${oldFp}\n` +
+            `New fingerprint: ${newFp}\n` +
+            `Previous bundle backed up to ${backupPath} (retain for 7 days, then ` +
+            `delete with: rm ${backupPath}).\n` +
+            `${secrets.length} secret(s) re-encrypted with a fresh data key and a ` +
+            `fresh ML-KEM-768 shared secret. The identity keypair in the ` +
+            `keychain is unchanged.`,
+        },
+      ],
+    };
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ *  tool array
  * ------------------------------------------------------------------ */
 
 export const secretsTools: Tool[] = [
@@ -738,4 +1009,5 @@ export const secretsTools: Tool[] = [
   secretsUnlockAgent,
   secretsLockAgent,
   secretsCopyToPage,
+  secretsRotate,
 ];
