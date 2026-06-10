@@ -593,6 +593,22 @@ export const secretsAdd: Tool = {
 
 /* ------------------------------------------------------------------ *
  *  browser_secrets_add_from_clipboard
+ *  ------------------------------------------------------------------
+ *
+ *  No tabId required (intentionally). Per the availability-first
+ *  design directive, secrets-management operations that do not
+ *  directly interact with a browser tab (add, rotate, list, get,
+ *  status) do NOT require a tabId. Agents that drive secrets
+ *  from non-browser contexts (cron jobs, setup scripts, MCP
+ *  server boot, etc.) can call these tools without ceremony.
+ *
+ *  The safety surface is the audit log (every op recorded with
+ *  name + fingerprint) + the rotate tool's automatic backup
+ *  before re-encrypting. If a destructive op goes wrong, the
+ *  user can grep the audit log and restore from a backup.
+ *
+ *  Per-tab operations (unlock, lock, copy_to_page) DO require
+ *  tabId — it's the cache key / paste target, not a gate.
  * ------------------------------------------------------------------ */
 
 export const secretsAddFromClipboard: Tool = {
