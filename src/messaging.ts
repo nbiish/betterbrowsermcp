@@ -96,6 +96,9 @@ export type SocketMessageMap = {
   browser_get_attribute: RequestPayload;
   browser_extract_text: RequestPayload;
   browser_evaluate: RequestPayload;
+  // React-friendly form input (v0.6.0+)
+  browser_set_input_value: RequestPayload;
+  browser_clear_input: RequestPayload;
   // PQC secrets (v0.7.0+) — server pushes a frozen object into the page's
   // window scope via the content script; the page listens for the
   // `bbmcp:secrets-loaded` CustomEvent.
