@@ -46,3 +46,10 @@ yarn-error.log*
 # verify the AGENTS.md / llms.txt content matches the repo's own
 # authoring (not the user's ~/.hermes/ templates).
 .agents/
+
+# Hermes / agent plan directories (auto-injected by subdirectory
+# context discovery — never intended for git)
+.hermes/
+.omx/
+.omo/
+.omp/
