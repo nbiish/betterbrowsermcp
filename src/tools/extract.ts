@@ -30,6 +30,8 @@ import {
   ExtractTextTool,
   GetAttributeTool,
   PasteTextTool,
+  SetInputValueTool,
+  ClearInputTool,
   WaitForTextTool,
 } from "@/types";
 
@@ -249,6 +251,127 @@ export const extractText: Tool = {
           text:
             `Text from "${validated.element}" (ref=${validated.ref}, tabId=${result.tabId ?? "n/a"}):\n\n` +
             `\`\`\`\n${text}\n\`\`\``,
+        },
+      ],
+    };
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ *  setInputValue — React-friendly controlled-input writer
+ * ------------------------------------------------------------------ */
+
+/**
+ * v0.6.0+ — the workhorse that fixes v0.5.0's React failure.
+ *
+ * Sequence (matches what humans do + what React expects):
+ *   1. Resolve the element (by ref or document.activeElement).
+ *   2. Focus it.
+ *   3. If React-instrumented, reset the `_valueTracker` to its
+ *      current value so React's onChange detector registers a
+ *      "change" on the next setter call.
+ *   4. Call the prototype's native value setter with the new text
+ *      (bypasses React's override on the instance, writes the DOM
+ *      value the way a real keyboard would).
+ *   5. Dispatch `input` (React's onChange listens for this), then
+ *      `change` (browser default), then `blur` (some React forms
+ *      only commit on blur; harmless on others).
+ *   6. Return a receipt with the resolved ref and resulting value.
+ *
+ * For contenteditable elements, fall back to
+ * `document.execCommand('insertText', ...)`.
+ */
+export const setInputValue: Tool = {
+  schema: {
+    name: SetInputValueTool.shape.name.value,
+    description: SetInputValueTool.shape.description.value,
+    inputSchema: zodToJsonSchema(SetInputValueTool.shape.arguments),
+  },
+  handle: async (context, params) => {
+    const validated = SetInputValueTool.shape.arguments.parse(params);
+    const result = (await context.sendSocketMessage("browser_set_input_value", {
+      text: validated.text,
+      ref: validated.ref,
+      element: validated.element,
+      tabId: validated.tabId,
+    })) as any;
+
+    if (!result || !result.ok) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Failed to set value${validated.ref ? ` on "${validated.element}" (ref=${validated.ref})` : " on the focused element"}: ${result?.error || "unknown error"}\n\n` +
+              `Troubleshooting:\n` +
+              `- The element may not be editable (input, textarea, or contenteditable only).\n` +
+              `- The ref may be stale — re-run \`browser_snapshot\` to get fresh refs.\n` +
+              `- If the field is inside a shadow DOM or cross-origin iframe, this tool can't reach it.\n` +
+              `- As a last resort, \`browser_evaluate\` (subject to CSP) can call the framework's internal state setter directly.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const targetDesc = validated.ref
+      ? `"${validated.element}" (ref=${validated.ref})`
+      : "the focused element";
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Set value on ${targetDesc} (tabId=${result.tabId ?? "n/a"}, length=${result.valueLength ?? "?"}, react=${result.reactInstrumented ? "yes" : "no"}).\n\n` +
+            `The element's \`value\` is now \`${result.value ?? ""}\`. React's valueTracker was reset before the setter call so controlled inputs will see this as a real change. ` +
+            `If the page still shows the old value, the form's onChange handler is doing additional validation — re-snapshot and inspect.`,
+        },
+      ],
+    };
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ *  clearInput — empty an input the React-friendly way
+ * ------------------------------------------------------------------ */
+
+export const clearInput: Tool = {
+  schema: {
+    name: ClearInputTool.shape.name.value,
+    description: ClearInputTool.shape.description.value,
+    inputSchema: zodToJsonSchema(ClearInputTool.shape.arguments),
+  },
+  handle: async (context, params) => {
+    const validated = ClearInputTool.shape.arguments.parse(params);
+    const result = (await context.sendSocketMessage("browser_clear_input", {
+      ref: validated.ref,
+      element: validated.element,
+      tabId: validated.tabId,
+    })) as any;
+
+    if (!result || !result.ok) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Failed to clear${validated.ref ? ` "${validated.element}" (ref=${validated.ref})` : " the focused element"}: ${result?.error || "unknown error"}\n\n` +
+              `The ref may be stale — re-run \`browser_snapshot\` to get fresh refs.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const targetDesc = validated.ref
+      ? `"${validated.element}" (ref=${validated.ref})`
+      : "the focused element";
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Cleared ${targetDesc} (tabId=${result.tabId ?? "n/a"}, length=${result.valueLength ?? 0}, react=${result.reactInstrumented ? "yes" : "no"}).`,
         },
       ],
     };

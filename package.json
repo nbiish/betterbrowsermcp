@@ -1,7 +1,7 @@
 {
   "name": "@nbiish/betterbrowsermcp",
-  "version": "0.5.0",
-  "description": "Better Browser MCP — multi-agent local browser automation with multi-tab support. Drop-in upgrade of @browsermcp/mcp with configurable ports, per-agent WebSocket paths, no more port-9009 fighting, and v0.5.0 SPA-state tools (paste, wait_for_text, get_attribute, extract_text, evaluate) for driving Stripe/OpenAI/dashboards.",
+  "version": "0.7.0",
+  "description": "Better Browser MCP — multi-agent local browser automation with multi-tab support. Drop-in upgrade of @browsermcp/mcp with configurable ports, per-agent WebSocket paths, no more port-9009 fighting, v0.5.0 SPA-state tools (paste, wait_for_text, get_attribute, extract_text, evaluate), v0.6.0 React-friendly form input (browser_set_input_value + browser_clear_input) that bypasses React's valueTracker so Stripe/GitHub/Vercel/Linear controlled inputs accept the value, and v0.7.0 PQC secrets integration (9 browser_secrets_* tools backed by ML-KEM-768 + AES-256-GCM).",
   "author": "Nbiish",
   "homepage": "https://github.com/nbiish/betterbrowsermcp",
   "bugs": {
