@@ -466,6 +466,83 @@ export const SecretsCopyToPageTool = z.object({
   }),
 });
 
+/**
+ * v0.6.0+ — React-friendly setInputValue.
+ *
+ * The well-known bug: `desc.set.call(el, text)` (used by browser_paste_text
+ * and browser_type) bypasses React's prototype value setter, which sets
+ * the DOM value, but React 16+'s internal `valueTracker` is still
+ * tracking the *old* value, so the controlled-input's onChange never
+ * fires and React's state never updates. The result: the field looks
+ * empty in the next ARIA snapshot, the page is invalid, the submit
+ * button is no-op.
+ *
+ * The fix: explicitly reset the valueTracker (or call its internal
+ * `setValue(prevValue)`) so React's change detector notices the
+ * external write. Then use the native value setter, then dispatch
+ * `input` + `change` + `blur` to commit the value.
+ *
+ * This works on:
+ *  - React 16/17/18 controlled inputs (the original canary — Stripe
+ *    dashboard, GitHub, Vercel, Linear, Notion, etc.)
+ *  - Vue 3 v-model inputs (same value-tracker pattern)
+ *  - Plain HTML inputs/textareas (no React — valueTracker is undefined
+ *    so we skip the reset)
+ *  - contenteditable (uses document.execCommand fallback after
+ *    attempting the tracker reset)
+ */
+export const SetInputValueTool = z.object({
+  name: z.literal("browser_set_input_value"),
+  description: z.literal(
+    "Set the value of a form input, textarea, or contenteditable element with full React-friendly semantics. Resets React's internal valueTracker (so controlled inputs accept the value), then uses the native value setter, then dispatches `input` + `change` + `blur` events. This is the reliable path for React/Vue/Angular controlled inputs where `browser_paste_text` and `browser_type` fail silently. Use for Stripe payment-link titles, GitHub repo names, Vercel project fields, Linear issue titles, Notion page names, or any other controlled form input. If `ref` is provided, the element is focused first; otherwise the currently focused element is used.",
+  ),
+  arguments: z.object({
+    text: z
+      .string()
+      .describe("The value to set in the element. Pass an empty string to clear."),
+    ref: z
+      .string()
+      .optional()
+      .describe(
+        "Optional element ref. If provided, the element is focused before the value is set. If omitted, the currently focused element is used.",
+      ),
+    element: z
+      .string()
+      .optional()
+      .describe(
+        "Human-readable description of the target element (required if `ref` is set, for permission)",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+/**
+ * v0.6.0+ — clearInput: empty an input the React-friendly way.
+ * Companion to setInputValue. Use before setInputValue when the field
+ * already has stale content from a prior failed paste.
+ */
+export const ClearInputTool = z.object({
+  name: z.literal("browser_clear_input"),
+  description: z.literal(
+    "Clear the value of a form input, textarea, or contenteditable element using the React-friendly valueTracker-reset pattern. Counterpart to `browser_set_input_value` — call this first if a prior `browser_paste_text` or `browser_type` left stale content that the React state never cleared. If `ref` is provided, the element is focused first.",
+  ),
+  arguments: z.object({
+    ref: z
+      .string()
+      .optional()
+      .describe(
+        "Optional element ref. If provided, the element is focused before clearing. If omitted, the currently focused element is used.",
+      ),
+    element: z
+      .string()
+      .optional()
+      .describe(
+        "Human-readable description of the target element (required if `ref` is set, for permission)",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -497,6 +574,9 @@ export const MCPTool = z.discriminatedUnion("name", [
   GetAttributeTool,
   ExtractTextTool,
   EvaluateTool,
+  // React-friendly form input (v0.6.0+)
+  SetInputValueTool,
+  ClearInputTool,
   // PQC secrets integration (v0.7.0+)
   SecretsStatusTool,
   SecretsListTool,

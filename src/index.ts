@@ -86,6 +86,14 @@ const extractTools: Tool[] = [
   extract.getAttribute,
   extract.extractText,
   extract.evaluate,
+  // v0.6.0+ — React-friendly controlled-input writer + clearer.
+  // These fix the v0.5.0 React failure: pasteText dispatches a
+  // synthetic paste event but Stripe/GitHub/Vercel/Linear etc. all
+  // have a React valueTracker that blocks the change. setInputValue
+  // resets the tracker before calling the native value setter, so
+  // controlled inputs see a real change. See tools/extract.ts.
+  extract.setInputValue,
+  extract.clearInput,
 ];
 
 const snapshotTools: Tool[] = [
