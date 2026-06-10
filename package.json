@@ -1,6 +1,6 @@
 {
   "name": "@nbiish/betterbrowsermcp",
-  "version": "0.5.0",
+  "version": "0.7.0",
   "description": "Better Browser MCP — multi-agent local browser automation with multi-tab support. Drop-in upgrade of @browsermcp/mcp with configurable ports, per-agent WebSocket paths, no more port-9009 fighting, and v0.5.0 SPA-state tools (paste, wait_for_text, get_attribute, extract_text, evaluate) for driving Stripe/OpenAI/dashboards.",
   "author": "Nbiish",
   "homepage": "https://github.com/nbiish/betterbrowsermcp",

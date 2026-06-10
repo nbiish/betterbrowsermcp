@@ -42,6 +42,7 @@ import * as common from "@/tools/common";
 import * as custom from "@/tools/custom";
 import * as extract from "@/tools/extract";
 import * as manage from "@/tools/manage";
+import { secretsTools } from "./tools/secrets";
 import * as snapshot from "@/tools/snapshot";
 import type { Tool } from "@/tools/tool";
 import { createWebSocketServer } from "@/ws";
@@ -101,6 +102,7 @@ const snapshotTools: Tool[] = [
   ...manageTools,
   ...clipboardTools,
   ...extractTools,
+  ...secretsTools,
 ];
 
 const resources: Resource[] = [];
