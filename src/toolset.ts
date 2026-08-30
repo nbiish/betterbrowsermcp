@@ -11,6 +11,7 @@
 
 import * as clipboard from "@/tools/clipboard";
 import * as common from "@/tools/common";
+import { cursorTools } from "@/tools/cursor";
 import * as custom from "@/tools/custom";
 import * as extract from "@/tools/extract";
 import * as manage from "@/tools/manage";
@@ -80,4 +81,5 @@ export const allTools: Tool[] = [
   ...clipboardTools,
   ...extractTools,
   ...secretsTools,
+  ...cursorTools,
 ];

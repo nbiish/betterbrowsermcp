@@ -316,6 +316,27 @@ curl http://localhost:9009/
 | `browser_wait_for_content` | Resolve when the content script answers a readiness ping (default 10s) |
 | `browser_poll_events` | Drain buffered `tab_removed` / `tab_updated` / `binding_changed` events (also appended to `list_tabs` / `snapshot` output) |
 
+### CDP cursor tools (Phase 4)
+
+Real OS-level pointer input via CDP `Input.dispatchMouseEvent` —
+fires the full mouseenter/mousedown/mouseup chains that
+hover-reveal/tooltip UIs (masked secret keys, copy buttons) ignore
+when driven by synthetic JS events. Targeting resolves
+`selector` → `ref` (snapshot `@eNN`) → `xy` (viewport CSS px).
+All verbs are pass-through, subject to per-tab advisory locks
+(`TAB_LOCKED`/`BUSY` passthrough), and accept optional `tabId`.
+
+| Tool | Purpose |
+|---|---|
+| `browser_cursor_move` | Move the cursor to selector / ref / absolute xy |
+| `browser_cursor_hover` | Hover element center with real mouseenter/over; `duration_ms` holds position |
+| `browser_cursor_click` | Real click at target (`button` left/right, `count` 1/2) |
+| `browser_cursor_click_hold` | mousedown → `hold_ms` (default 500) → mouseup ("press and hold to reveal") |
+| `browser_cursor_drag` | Real drag: press at `start`, move held, release at `end` |
+| `browser_cursor_scroll` | Real wheel scroll (`deltaY`/`deltaX`, 100 ≈ one notch) at target or viewport |
+| `browser_cursor_submit` | Focus target then Enter / `requestSubmit()` (omit target = focused element) |
+| `browser_cursor_context_menu` | Real right-click at target |
+
 ### React-friendly form input (v0.6.0+)
 
 | Tool | Purpose |

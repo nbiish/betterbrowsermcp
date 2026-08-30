@@ -113,6 +113,17 @@ export type SocketMessageMap = {
   browser_acquire_tab: RequestPayload;
   browser_release_tab: RequestPayload;
   browser_wait_for_content: RequestPayload;
+  // CDP cursor (Phase 4) — pass-through verbs; the server forwards the
+  // payload verbatim (selector/ref/x/y + optional tabId) and the
+  // extension resolves targeting + executes real CDP input.
+  browser_cursor_move: RequestPayload;
+  browser_cursor_hover: RequestPayload;
+  browser_cursor_click: RequestPayload;
+  browser_cursor_click_hold: RequestPayload;
+  browser_cursor_drag: RequestPayload;
+  browser_cursor_scroll: RequestPayload;
+  browser_cursor_submit: RequestPayload;
+  browser_cursor_context_menu: RequestPayload;
 };
 
 /**
