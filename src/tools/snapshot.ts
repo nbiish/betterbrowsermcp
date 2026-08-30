@@ -23,7 +23,31 @@ import {
 import type { Context } from "@/context";
 import { captureAriaSnapshot } from "@/utils/aria-snapshot";
 
-import type { Tool } from "./tool";
+import type { Tool, ToolResult } from "./tool";
+
+/**
+ * v0.9.1: when the element action itself fails (unbound tab, stale
+ * ref, ELEMENT_NOT_FOUND), return an explicit isError result instead
+ * of snapshotting whatever page the browser is on — a follow-up
+ * snapshot of the WRONG page reads as success and derails the agent.
+ */
+function actionError(action: string, result: any): ToolResult | null {
+  if (!(result && typeof result === "object" && result.ok === false)) {
+    return null;
+  }
+  return {
+    isError: true as const,
+    content: [
+      {
+        type: "text",
+        text:
+          `${action} failed: ${result.error || "unknown error"}\n\n` +
+          `Tab IDs are agent-scoped — run browser_list_tabs for your bound tabs. ` +
+          `If the ref was stale, run browser_snapshot again for fresh refs.`,
+      },
+    ],
+  };
+}
 
 export const snapshot: Tool = {
   schema: {
@@ -50,7 +74,12 @@ export const click: Tool = {
   },
   handle: async (context: Context, params) => {
     const validatedParams = ClickTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_click", validatedParams);
+    const action = (await context.sendSocketMessage(
+      "browser_click",
+      validatedParams,
+    )) as any;
+    const failure = actionError("Click", action);
+    if (failure) return failure;
     const snapshot = await captureAriaSnapshot(
       context,
       validatedParams.tabId,
@@ -75,7 +104,12 @@ export const drag: Tool = {
   },
   handle: async (context: Context, params) => {
     const validatedParams = DragTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_drag", validatedParams);
+    const action = (await context.sendSocketMessage(
+      "browser_drag",
+      validatedParams,
+    )) as any;
+    const failure = actionError("Drag", action);
+    if (failure) return failure;
     const snapshot = await captureAriaSnapshot(
       context,
       validatedParams.tabId,
@@ -100,7 +134,12 @@ export const hover: Tool = {
   },
   handle: async (context: Context, params) => {
     const validatedParams = HoverTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_hover", validatedParams);
+    const action = (await context.sendSocketMessage(
+      "browser_hover",
+      validatedParams,
+    )) as any;
+    const failure = actionError("Hover", action);
+    if (failure) return failure;
     const snapshot = await captureAriaSnapshot(
       context,
       validatedParams.tabId,
@@ -125,7 +164,12 @@ export const type: Tool = {
   },
   handle: async (context: Context, params) => {
     const validatedParams = TypeTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_type", validatedParams);
+    const action = (await context.sendSocketMessage(
+      "browser_type",
+      validatedParams,
+    )) as any;
+    const failure = actionError("Type", action);
+    if (failure) return failure;
     const snapshot = await captureAriaSnapshot(
       context,
       validatedParams.tabId,
@@ -150,7 +194,12 @@ export const selectOption: Tool = {
   },
   handle: async (context: Context, params) => {
     const validatedParams = SelectOptionTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_select_option", validatedParams);
+    const action = (await context.sendSocketMessage(
+      "browser_select_option",
+      validatedParams,
+    )) as any;
+    const failure = actionError("Select option", action);
+    if (failure) return failure;
     const snapshot = await captureAriaSnapshot(
       context,
       validatedParams.tabId,

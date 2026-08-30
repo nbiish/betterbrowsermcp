@@ -24,7 +24,7 @@ import {
 
 import { captureAriaSnapshot } from "@/utils/aria-snapshot";
 
-import type { Tool, ToolFactory } from "./tool";
+import type { Tool, ToolFactory, ToolResult } from "./tool";
 
 /** Stringify the {tabId, label} suffix that the extension returns,
  *  so the LLM always knows which tab the call landed on. */
@@ -36,6 +36,36 @@ function tabSuffix(meta: any): string {
   if (meta.tabId !== undefined) return ` (tab ${meta.tabId})`;
   if (meta.label) return ` (tab: ${meta.label})`;
   return "";
+}
+
+/**
+ * v0.9.1: the extension resolves {ok:false, error} for tab-scoped
+ * failures (unbound tabId, no active tab, content-script not ready).
+ * Turning that into an explicit isError result — instead of printing
+ * a success line or snapshotting the wrong page — is what lets the
+ * agent self-correct instead of guessing.
+ */
+function tabOpError(
+  action: string,
+  result: any,
+  tabId?: number,
+): ToolResult | null {
+  if (!(result && typeof result === "object" && result.ok === false)) {
+    return null;
+  }
+  const target = tabId !== undefined ? ` (requested tabId=${tabId})` : "";
+  return {
+    isError: true as const,
+    content: [
+      {
+        type: "text",
+        text:
+          `${action} failed: ${result.error || "unknown error"}${target}\n\n` +
+          `Tab IDs are agent-scoped: you can only act on tabs bound to you. ` +
+          `Run browser_list_tabs to see your bound tabs and pass one of those tabIds explicitly.`,
+      },
+    ],
+  };
 }
 
 export const navigate: ToolFactory = (snapshot) => ({
@@ -50,6 +80,8 @@ export const navigate: ToolFactory = (snapshot) => ({
       url,
       tabId,
     })) as any;
+    const failure = tabOpError("Navigate", result, tabId);
+    if (failure) return failure;
     if (snapshot) {
       const snap = await captureAriaSnapshot(context, tabId);
       return snap;
@@ -82,6 +114,8 @@ export const goBack: ToolFactory = (snapshot) => ({
     const result = (await context.sendSocketMessage("browser_go_back", {
       tabId,
     })) as any;
+    const failure = tabOpError("Go back", result, tabId);
+    if (failure) return failure;
     if (snapshot) {
       return captureAriaSnapshot(context, tabId);
     }
@@ -107,6 +141,8 @@ export const goForward: ToolFactory = (snapshot) => ({
     const result = (await context.sendSocketMessage("browser_go_forward", {
       tabId,
     })) as any;
+    const failure = tabOpError("Go forward", result, tabId);
+    if (failure) return failure;
     if (snapshot) {
       return captureAriaSnapshot(context, tabId);
     }
@@ -142,7 +178,12 @@ export const pressKey: Tool = {
   },
   handle: async (context, params) => {
     const { key, tabId } = PressKeyTool.shape.arguments.parse(params);
-    await context.sendSocketMessage("browser_press_key", { key, tabId });
+    const result = (await context.sendSocketMessage("browser_press_key", {
+      key,
+      tabId,
+    })) as any;
+    const failure = tabOpError(`Press key "${key}"`, result, tabId);
+    if (failure) return failure;
     return captureAriaSnapshot(context, tabId, `Pressed key ${key}`);
   },
 };

@@ -1,6 +1,6 @@
 {
   "name": "@nbiish/betterbrowsermcp",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Better Browser MCP — multi-agent local browser automation with multi-tab support. Drop-in upgrade of @browsermcp/mcp with configurable ports, per-agent WebSocket paths, no more port-9009 fighting, v0.5.0 SPA-state tools (paste, wait_for_text, get_attribute, extract_text, evaluate), v0.6.0 React-friendly form input (browser_set_input_value + browser_clear_input) that bypasses React's valueTracker so Stripe/GitHub/Vercel/Linear controlled inputs accept the value, v0.7.0 PQC secrets integration (10 browser_secrets_* tools backed by ML-KEM-768 + AES-256-GCM, with append-only audit log at ~/.config/pqc-secrets/audit.log), v0.8.0 availability-first safety rails (data-key rotation via browser_secrets_rotate, dry-run on add, redact helper on get, SHA3-256 fingerprint audit), and v0.9.0 hub mode (one process serves many agents via BROWSER_MCP_HUB=true, MCP over Streamable HTTP at /mcp/<agentId>, tab adoption browser_bind_tab/browser_unbind_tab, advisory per-tab locks browser_acquire_tab/browser_release_tab, browser_wait_for_content, browser_poll_events, background browser_open_tab via makeActive=false).",
   "author": "Nbiish",
   "homepage": "https://github.com/nbiish/betterbrowsermcp",

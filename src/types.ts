@@ -49,7 +49,9 @@ const ElementSchema = z.object({
 
 export const NavigateTool = z.object({
   name: z.literal("browser_navigate"),
-  description: z.literal("Navigate to a URL"),
+  description: z.literal(
+    "Navigate a tab you own to a URL. tabId (optional) must be one of YOUR bound tabs from browser_list_tabs — tabs are agent-scoped, and calls targeting another agent's tab fail explicitly instead of acting. When tabId is omitted, the agent's active tab is used (fails with the roster if none is set).",
+  ),
   arguments: z.object({
     url: z.string().describe("The URL to navigate to"),
     tabId: TabIdParam,
@@ -427,9 +429,22 @@ export const GetAttributeTool = z.object({
 export const ExtractTextTool = z.object({
   name: z.literal("browser_extract_text"),
   description: z.literal(
-    "Extract the `textContent` of a single element by ref. Cheaper than a full snapshot when you just need the visible text of one element. Returns the text as a plain string with whitespace normalized. Use to grab a heading, a status message, or a single field's value without paying the snapshot cost.",
+    "Extract the `textContent` of a single element by snapshot ref. Cheaper than a full snapshot when you just need the visible text of one element — a heading, a status message, a single field's value. Returns whitespace-normalized text. `ref` is REQUIRED and must come from a fresh browser_snapshot (refs remap on every snapshot). For CSS-selector or computed extraction use browser_evaluate instead.",
   ),
-  arguments: ElementSchema,
+  arguments: z.object({
+    element: z
+      .string()
+      .optional()
+      .describe(
+        "Human-readable element description (permission/audit trail; the ref is what actually targets the element)",
+      ),
+    ref: z
+      .string()
+      .describe(
+        "Exact target element reference from the latest browser_snapshot (e.g. 'e12')",
+      ),
+    tabId: TabIdParam,
+  }),
 });
 
 export const EvaluateTool = z.object({
