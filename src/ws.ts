@@ -29,12 +29,16 @@
  * BROWSER_MCP_AUTH_TOKEN (enforced in src/http.ts for MCP-over-HTTP).
  */
 
+import { promises as dns } from "node:dns";
 import http from "node:http";
+import net from "node:net";
+import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import {
   appConfig,
   defaultAgentId,
+  isLoopbackHost,
   mcpConfig,
   parseAgentFromPath,
 } from "@/config";
@@ -47,6 +51,18 @@ import { handleMcpHttpRequest } from "./http";
 
 export type WsServerHandle = {
   httpServer: http.Server;
+  /**
+   * Complementary loopback listeners. Hostname binds ("localhost")
+   * resolve to multiple addresses but Node listens on the FIRST one
+   * only — on IPv6-first machines that is ::1, and IPv4-only clients
+   * get ECONNREFUSED (v0.9.0 field bug: the extension dials the IPv4
+   * loopback literal). For hostname binds we additionally listen on
+   * every other loopback address the hostname resolves to. Literal-IP
+   * binds are respected exactly as configured — no auto-complement.
+   */
+  extraHttpServers: http.Server[];
+  /** Loopback addresses actually listening (diagnostics/health JSON). */
+  boundAddresses: string[];
   wss: WebSocketServer;
   /**
    * Single-agent mode: THE Context of this process.
@@ -86,7 +102,7 @@ export async function createWebSocketServer(): Promise<WsServerHandle> {
     agentRegistry.register(agentId, context);
   }
 
-  const httpServer = http.createServer((req, res) => {
+  const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
     const path = (req.url ?? "/").split("?")[0];
     if (path === "/mcp" || path.startsWith("/mcp/")) {
       // MCP over Streamable HTTP (same HTTP server, v0.9.0+).
@@ -95,10 +111,10 @@ export async function createWebSocketServer(): Promise<WsServerHandle> {
     }
     // Health endpoint for diagnostic scripts. Returns JSON describing
     // the server state, the mode, and the known agents.
-    void handleHealthRequest(res, context, hubMode);
-  });
+    void handleHealthRequest(res, context, hubMode, boundAddresses);
+  };
 
-  httpServer.on("upgrade", (request, socket, head) => {
+  const onUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlAgent = parseAgentFromPath(request.url);
 
     if (urlAgent === null) {
@@ -130,7 +146,10 @@ export async function createWebSocketServer(): Promise<WsServerHandle> {
     wss.handleUpgrade(request, socket, head, (ws) => {
       handleConnection(ws, targetCtx);
     });
-  });
+  };
+
+  const httpServer = http.createServer(onRequest);
+  httpServer.on("upgrade", onUpgrade);
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
@@ -140,13 +159,60 @@ export async function createWebSocketServer(): Promise<WsServerHandle> {
     });
   });
 
-  return { httpServer, wss, context, hubMode };
+  // Loopback hostname binds resolve to MULTIPLE addresses but Node
+  // listens on the FIRST one only — on IPv6-first machines that is
+  // ::1, and IPv4-only clients get ECONNREFUSED (v0.9.0 field bug:
+  // the extension dials the IPv4 loopback literal). For hostname
+  // binds, listen on every OTHER loopback address the hostname
+  // resolves to, best-effort: the primary listener stays
+  // authoritative if a stack does not exist (e.g. IPv6-less hosts).
+  // Literal-IP binds are respected exactly as configured.
+  const extraHttpServers: http.Server[] = [];
+  const primaryAddr = httpServer.address();
+  if (primaryAddr && typeof primaryAddr === "object" && net.isIP(host) === 0) {
+    let resolved: { address: string; family: number }[] = [];
+    try {
+      resolved = await dns.lookup(host, { all: true });
+    } catch {
+      // Unresolvable hostname should have failed the primary listen;
+      // nothing to complement.
+    }
+    for (const { address } of resolved) {
+      if (address === primaryAddr.address) continue;
+      if (!isLoopbackHost(address)) continue; // never widen the bind
+      const secondary = http.createServer(onRequest);
+      secondary.on("upgrade", onUpgrade);
+      const ok = await new Promise<boolean>((resolve) => {
+        secondary.once("error", () => resolve(false));
+        secondary.listen(port, address, () => resolve(true));
+      });
+      if (ok) {
+        extraHttpServers.push(secondary);
+        process.stderr.write(
+          `[betterbrowsermcp] Also listening on ${address}:${port} (complementary loopback)\n`,
+        );
+      } else {
+        secondary.close();
+      }
+    }
+  }
+
+  const boundAddresses = [
+    ...new Set(
+      [httpServer, ...extraHttpServers]
+        .filter((s) => s.listening)
+        .map((s) => (s.address() as net.AddressInfo).address),
+    ),
+  ];
+
+  return { httpServer, extraHttpServers, boundAddresses, wss, context, hubMode };
 }
 
 async function handleHealthRequest(
   res: http.ServerResponse,
   primaryContext: Context,
   hubMode: boolean,
+  boundAddresses: string[],
 ): Promise<void> {
   // Collect per-agent status. boundTabs requires an extension round
   // trip; probe connected agents with a short timeout so / stays fast.
@@ -193,6 +259,7 @@ async function handleHealthRequest(
       wsPathPrefix: hubMode ? mcpConfig.wsPathPrefix : undefined,
       mcpHttpPath: hubMode ? "/mcp/<agentId>" : "/mcp",
       authRequired: mcpConfig.authToken !== "",
+      boundAddresses,
       agents: statuses,
     }),
   );
