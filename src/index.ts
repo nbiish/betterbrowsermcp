@@ -2,32 +2,39 @@
 /**
  * @betterbrowsermcp/mcp — entry point
  *
- * Single-agent MCP process. Spawn one process per agent you want to
- * support. Each process binds its own port and serves its own
- * WebSocket endpoint. The browser extension connects to all known
- * endpoints and lets the user bind each tab to a specific agent.
+ * Single-agent mode (default — unchanged, byte-compatible):
+ *   One stdio MCP process = one agent. The process binds its own port
+ *   and serves its own WebSocket endpoint. Spawn one process per agent.
+ *
+ * Hub mode (BROWSER_MCP_HUB=true, v0.9.0+):
+ *   ONE long-lived process serves MANY agents:
+ *     - any ws://host:port/ws/<agentId> is accepted (per-agent Context
+ *       lazily created on first connect via the AgentRegistry)
+ *     - MCP is additionally exposed over Streamable HTTP at
+ *       /mcp and /mcp/<agentId> on the same HTTP server
+ *     - GET / returns hub health JSON (mode + agents[])
+ *   stdio is disabled in hub mode (there is no single agent to bind it
+ *   to); the process stays alive on the HTTP server until SIGINT/SIGTERM.
  *
  * Environment variables (see config.ts for full reference):
  *   BROWSER_MCP_AGENT_ID   default: "default"
  *   BROWSER_MCP_PORT       default: 9009
- *   BROWSER_MCP_BIND       default: 127.0.0.1
- *   BROWSER_MCP_AUTH_TOKEN optional
+ *   BROWSER_MCP_BIND       default: localhost
+ *   BROWSER_MCP_AUTH_TOKEN optional (REQUIRED for non-loopback /mcp)
+ *   BROWSER_MCP_HUB        default: false
  *
- * Example multi-agent setup:
+ * Example multi-agent setup (classic, one process per agent):
  *   # Hermes
  *   BROWSER_MCP_AGENT_ID=hermes BROWSER_MCP_PORT=9009 \
  *     npx @betterbrowsermcp/mcp@latest &
  *   # OMP
  *   BROWSER_MCP_AGENT_ID=omp BROWSER_MCP_PORT=9010 \
  *     npx @betterbrowsermcp/mcp@latest &
- *   # Codex
- *   BROWSER_MCP_AGENT_ID=codex BROWSER_MCP_PORT=9011 \
- *     npx @betterbrowsermcp/mcp@latest &
  *
- * Then point the browser extension at all three endpoints:
- *   ws://127.0.0.1:9009/ws/hermes
- *   ws://127.0.0.1:9010/ws/omp
- *   ws://127.0.0.1:9011/ws/codex
+ * Example hub setup (one process, many agents):
+ *   BROWSER_MCP_HUB=true BROWSER_MCP_PORT=9009 node dist/index.js
+ *   # extension connects to ws://localhost:9009/ws/hermes etc.
+ *   # MCP clients POST JSON-RPC to http://localhost:9009/mcp/hermes
  */
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -37,17 +44,12 @@ import { program } from "commander";
 import { appConfig, mcpConfig, wsUrlForAgent } from "@/config";
 import type { Resource } from "@/resources/resource";
 import { createServerWithTools } from "@/server";
-import * as clipboard from "@/tools/clipboard";
-import * as common from "@/tools/common";
-import * as custom from "@/tools/custom";
-import * as extract from "@/tools/extract";
-import * as manage from "@/tools/manage";
-import { secretsTools } from "./tools/secrets";
-import * as snapshot from "@/tools/snapshot";
-import type { Tool } from "@/tools/tool";
+import { allTools } from "@/toolset";
 import { createWebSocketServer } from "@/ws";
 
 import packageJSON from "../package.json";
+
+const resources: Resource[] = [];
 
 function setupExitWatchdog(server: Server): void {
   process.stdin.on("close", async () => {
@@ -57,65 +59,29 @@ function setupExitWatchdog(server: Server): void {
   });
 }
 
-const commonTools: Tool[] = [common.pressKey, common.wait];
+async function runHubMode(): Promise<void> {
+  const { httpServer } = await createWebSocketServer();
 
-const customTools: Tool[] = [custom.getConsoleLogs, custom.screenshot];
+  process.stderr.write(
+    `[betterbrowsermcp] ${appConfig.name} v${packageJSON.version}\n` +
+      `[betterbrowsermcp] Mode: HUB (one process, many agents)\n` +
+      `[betterbrowsermcp] WebSocket: ws://${mcpConfig.bindAddress}:${mcpConfig.defaultWsPort}${mcpConfig.wsPathPrefix}/<agentId>\n` +
+      `[betterbrowsermcp] MCP over HTTP: http://${mcpConfig.bindAddress}:${mcpConfig.defaultWsPort}/mcp/<agentId>\n` +
+      `[betterbrowsermcp] Health: http://${mcpConfig.bindAddress}:${mcpConfig.defaultWsPort}/\n` +
+      `[betterbrowsermcp] Auth required: ${mcpConfig.authToken !== ""}\n` +
+      `[betterbrowsermcp] Port-murder disabled (hard-fail on collision)\n`,
+  );
 
-// Multi-tab management tools — always registered, regardless of whether
-// the user has bound any tabs yet. The LLM uses these to discover the
-// available tabs, set the active one, and label them.
-const manageTools: Tool[] = [
-  manage.listTabs,
-  manage.openTab,
-  manage.closeTab,
-  manage.renameTab,
-  manage.setActiveTab,
-];
+  const shutdown = () => {
+    httpServer.close(() => process.exit(0));
+    // Force-exit if connections linger.
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
 
-// Clipboard tool — reads "Click to copy" content from any page that
-// uses navigator.clipboard.writeText. Useful for Stripe publishable
-// keys, secret keys, GitHub PATs, AWS access keys, etc.
-const clipboardTools: Tool[] = [clipboard.copyToClipboard];
-
-// Extraction & SPA-state tools (v0.5.0+) — paste, wait_for_text,
-// get_attribute, extract_text, evaluate. See tools/extract.ts for
-// the per-tool rationale and failure-mode guidance.
-const extractTools: Tool[] = [
-  extract.pasteText,
-  extract.waitForText,
-  extract.getAttribute,
-  extract.extractText,
-  extract.evaluate,
-  // v0.6.0+ — React-friendly controlled-input writer + clearer.
-  // These fix the v0.5.0 React failure: pasteText dispatches a
-  // synthetic paste event but Stripe/GitHub/Vercel/Linear etc. all
-  // have a React valueTracker that blocks the change. setInputValue
-  // resets the tracker before calling the native value setter, so
-  // controlled inputs see a real change. See tools/extract.ts.
-  extract.setInputValue,
-  extract.clearInput,
-];
-
-const snapshotTools: Tool[] = [
-  common.navigate(true),
-  common.goBack(true),
-  common.goForward(true),
-  snapshot.snapshot,
-  snapshot.click,
-  snapshot.hover,
-  snapshot.type,
-  snapshot.selectOption,
-  ...commonTools,
-  ...customTools,
-  ...manageTools,
-  ...clipboardTools,
-  ...extractTools,
-  ...secretsTools,
-];
-
-const resources: Resource[] = [];
-
-async function createServer(): Promise<Server> {
+async function runSingleAgentMode(): Promise<void> {
   // Start the WebSocket server first. If the port is already taken,
   // this throws a hard error and the process exits — that's the
   // intended behavior. Two MCP processes should use different ports
@@ -132,13 +98,17 @@ async function createServer(): Promise<Server> {
       `[betterbrowsermcp] Port-murder disabled (hard-fail on collision)\n`,
   );
 
-  return createServerWithTools({
+  const server = await createServerWithTools({
     name: appConfig.name,
     version: packageJSON.version,
-    tools: snapshotTools,
+    tools: allTools,
     resources,
     context,
   });
+  setupExitWatchdog(server);
+
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
 
 program
@@ -146,10 +116,10 @@ program
   .name(packageJSON.name)
   .description(appConfig.description)
   .action(async () => {
-    const server = await createServer();
-    setupExitWatchdog(server);
-
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+    if (mcpConfig.hubMode) {
+      await runHubMode();
+      return;
+    }
+    await runSingleAgentMode();
   });
 program.parse(process.argv);

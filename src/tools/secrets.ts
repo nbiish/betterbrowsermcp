@@ -91,14 +91,80 @@ const execFileP = promisify(execFile);
  * ------------------------------------------------------------------ */
 
 /**
- * Path to the pqc-secrets binary. Defaults to the user's standard
- * install location, but can be overridden via the
- * BROWSER_MCP_PQC_SECRETS_BIN env var (useful for sandboxing or
- * for testing against a mock).
+ * Path to the pqc-secrets binary, resolved ONCE per process in this
+ * order (v0.9.0+ — previously hardcoded to the legacy path):
+ *
+ *   1. BROWSER_MCP_PQC_SECRETS_BIN env var (sandboxing / mock testing)
+ *   2. `which pqc-secrets` (whatever is on the user's PATH)
+ *   3. ~/.local/bin/pqc-secrets
+ *   4. /usr/local/bin/pqc-secrets
+ *   5. ~/code/ainish-coder/bin/pqc-secrets (legacy location)
+ *
+ * The winning path (and how it won) is logged to stderr exactly once.
+ * If nothing exists, the legacy path is returned as a fallback so the
+ * status tool can report it as MISSING with a clear message.
  */
-const PQC_SECRETS_BIN =
-  process.env.BROWSER_MCP_PQC_SECRETS_BIN ||
-  join(homedir(), "code", "ainish-coder", "bin", "pqc-secrets");
+let pqcBinResolution: Promise<{ bin: string; source: string }> | null = null;
+
+async function whichPqc(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileP("which", ["pqc-secrets"], {
+      timeout: 5_000,
+    });
+    const first = stdout.toString().trim().split("\n")[0]?.trim();
+    return first || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePqcSecretsBin(): Promise<{ bin: string; source: string }> {
+  if (!pqcBinResolution) {
+    pqcBinResolution = (async () => {
+      const legacy = join(homedir(), "code", "ainish-coder", "bin", "pqc-secrets");
+      const localBin = join(homedir(), ".local", "bin", "pqc-secrets");
+
+      const envBin = process.env.BROWSER_MCP_PQC_SECRETS_BIN;
+      if (envBin) {
+        return { bin: envBin, source: "env BROWSER_MCP_PQC_SECRETS_BIN" };
+      }
+      const whichHit = await whichPqc();
+      if (whichHit) {
+        return { bin: whichHit, source: "PATH (which pqc-secrets)" };
+      }
+      if (existsSync(localBin)) {
+        return { bin: localBin, source: "~/.local/bin" };
+      }
+      if (existsSync("/usr/local/bin/pqc-secrets")) {
+        return { bin: "/usr/local/bin/pqc-secrets", source: "/usr/local/bin" };
+      }
+      if (existsSync(legacy)) {
+        return { bin: legacy, source: "legacy ~/code/ainish-coder/bin" };
+      }
+      // Nothing found — return the legacy path so status reports a
+      // recognizable MISSING location instead of throwing.
+      process.stderr.write(
+        `[betterbrowsermcp] pqc-secrets binary NOT FOUND in any known location ` +
+          `(env, PATH, ~/.local/bin, /usr/local/bin, legacy). Falling back to ${legacy}\n`,
+      );
+      return { bin: legacy, source: "fallback (not found)" };
+    })();
+  }
+  return pqcBinResolution;
+}
+
+async function pqcBin(): Promise<string> {
+  const { bin, source } = await resolvePqcSecretsBin();
+  if (!pqcBinLogged) {
+    pqcBinLogged = true;
+    process.stderr.write(
+      `[betterbrowsermcp] pqc-secrets binary: ${bin} (source: ${source})\n`,
+    );
+  }
+  return bin;
+}
+
+let pqcBinLogged = false;
 
 const PQC_BUNDLE_PATH = join(
   homedir(),
@@ -146,8 +212,9 @@ interface PqcSecretsExecError extends Error {
 }
 
 async function pqc(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const bin = await pqcBin();
   try {
-    const { stdout, stderr } = await execFileP(PQC_SECRETS_BIN, args, {
+    const { stdout, stderr } = await execFileP(bin, args, {
       timeout: 15_000,
       maxBuffer: 4 * 1024 * 1024,
       env: {
@@ -215,9 +282,10 @@ export const secretsStatus: Tool = {
     inputSchema: zodToJsonSchema(SecretsStatusTool.shape.arguments),
   },
   handle: async () => {
+    const bin = await pqcBin();
     const status: Record<string, unknown> = {
-      pqcSecretsBin: PQC_SECRETS_BIN,
-      binExists: existsSync(PQC_SECRETS_BIN),
+      pqcSecretsBin: bin,
+      binExists: existsSync(bin),
       bundlePath: PQC_BUNDLE_PATH,
       bundleExists: existsSync(PQC_BUNDLE_PATH),
       pubkeyPath: PQC_PUBKEY_PATH,
@@ -523,42 +591,14 @@ export const secretsAdd: Tool = {
         };
       }
 
-      // Build the stdin payload for `pack` — KEY=VALUE lines,
-      // one per secret, separated by newlines. pack will AES-256-GCM
-      // encrypt the payload with a fresh data key + KEM shared
-      // secret, then atomic-rename over the bundle file.
-      const stdinPayload = Object.entries(map)
-        .map(([k, v]) => `${k}=${v}`)
-        .join("\n");
-
+      // Pack: KEY=VALUE lines go to `pack` on stdin (AES-256-GCM with
+      // a fresh data key + KEM shared secret, then atomic-rename over
+      // the bundle file).
       // Pack with a fresh data key + KEM shared secret.
       // pack always generates fresh randomness, so the bundle
       // is effectively re-keyed. The recipient pubkey (and its
       // private key in the keychain) is unchanged.
-      const { spawn } = await import("node:child_process");
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn(PQC_SECRETS_BIN, ["pack"], {
-          env: {
-            ...process.env,
-            PQC_KEYCHAIN_ACCOUNT:
-              process.env.PQC_KEYCHAIN_ACCOUNT || "pqc-secrets-key",
-          },
-        });
-        let stderr = "";
-        child.stderr.on("data", (d) => (stderr += d.toString()));
-        child.on("close", (code) => {
-          if (code === 0) resolve();
-          else
-            reject(
-              new Error(
-                `pqc-secrets pack exited ${code}: ${stderr || "<no stderr>"}`,
-              ),
-            );
-        });
-        child.on("error", reject);
-        child.stdin.write(stdinPayload);
-        child.stdin.end();
-      });
+      await packSecretsMap(map);
 
       // Audit: record the add with the value's fingerprint, never
       // the value itself.
@@ -591,6 +631,44 @@ export const secretsAdd: Tool = {
   },
 };
 
+/**
+ * Shared pack flow: AES-256-GCM re-encrypt the ENTIRE bundle with a
+ * fresh data key + KEM shared secret from the given name→value map.
+ * Used by browser_secrets_add, browser_secrets_add_from_clipboard, and
+ * browser_secrets_rotate. The recipient pubkey (and its private key in
+ * the keychain) is unchanged.
+ */
+async function packSecretsMap(map: Record<string, string>): Promise<void> {
+  const stdinPayload = Object.entries(map)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+  const bin = await pqcBin();
+  const { spawn } = await import("node:child_process");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(bin, ["pack"], {
+      env: {
+        ...process.env,
+        PQC_KEYCHAIN_ACCOUNT:
+          process.env.PQC_KEYCHAIN_ACCOUNT || "pqc-secrets-key",
+      },
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `pqc-secrets pack exited ${code}: ${stderr || "<no stderr>"}`,
+          ),
+        );
+    });
+    child.on("error", reject);
+    child.stdin.write(stdinPayload);
+    child.stdin.end();
+  });
+}
+
 /* ------------------------------------------------------------------ *
  *  browser_secrets_add_from_clipboard
  *  ------------------------------------------------------------------
@@ -617,30 +695,94 @@ export const secretsAddFromClipboard: Tool = {
     description: SecretsAddFromClipboardTool.shape.description.value,
     inputSchema: zodToJsonSchema(SecretsAddFromClipboardTool.shape.arguments),
   },
-  handle: async (_context, params) => {
-    const { name } = SecretsAddFromClipboardTool.shape.arguments.parse(params);
-    // The user must have already copied the value to the system
-    // clipboard (e.g. via Cmd+C after selecting a "Click to copy"
-    // button or a text selection). The extension reads the
-    // clipboard and the server adds it to the bundle.
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            `This tool requires the user to have already copied the value to the\n` +
-            `system clipboard. Have them:\n` +
-            `  1. Select the value on the page (or click a "Click to copy" button)\n` +
-            `  2. Press Cmd+C (or use the page's own copy action)\n` +
-            `  3. Then re-run \`browser_secrets_add_from_clipboard\` with name="${name}"\n\n` +
-            `Note: this tool is intentionally a no-op stub in v0.7.0. The full\n` +
-            `implementation needs a small extension-side message handler that reads\n` +
-            `navigator.clipboard.readText() and forwards to the server. That's\n` +
-            `scheduled for v0.7.1 — see the v0.7.0 worktree TODO.`,
-        },
-      ],
-      isError: true,
-    };
+  // v0.9.0: fully implemented. Flow (frozen WS contract item 2):
+  //   1. Ask the extension (type browser_secrets_add_from_clipboard,
+  //      payload {name, tabId}) — its content script returns the
+  //      system clipboard text (manifest gains "clipboardRead").
+  //   2. Take result.value and merge+pack it into the PQC bundle
+  //      (same flow as browser_secrets_add with merge=true).
+  //   3. Audit-log with the value's fingerprint — never the value.
+  handle: async (context, params) => {
+    const { name, tabId } =
+      SecretsAddFromClipboardTool.shape.arguments.parse(params);
+    try {
+      const result = (await context.sendSocketMessage(
+        "browser_secrets_add_from_clipboard",
+        { name, tabId },
+      )) as any;
+
+      if (!result || !result.ok || typeof result.value !== "string") {
+        logAuditEvent({
+          action: "add_from_clipboard",
+          name,
+          tabId,
+          error: result?.error || "extension returned no clipboard value",
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Failed to read the clipboard value${result?.error ? `: ${result.error}` : "."}\n\n` +
+                `Make sure the value is on the system clipboard FIRST\n` +
+                `(click the page's "Click to copy" button or select + Cmd+C),\n` +
+                `then re-run this tool with name="${name}".`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const value = result.value;
+
+      // Merge with existing secrets (always merge here — same
+      // semantics as browser_secrets_add with merge=true) and pack.
+      const existing: ParsedSecret[] = parseExport(
+        (await pqc(["export"])).stdout,
+      );
+      const map: Record<string, string> = {};
+      for (const e of existing) map[e.name] = e.value;
+      const wasExisting = name in map;
+      map[name] = value;
+
+      await packSecretsMap(map);
+
+      // Audit: fingerprint only — never the value itself.
+      logAuditEvent({
+        action: "add_from_clipboard",
+        name,
+        tabId,
+        detail: `merge=true; total=${Object.keys(map).length}; value-fp=${valueFingerprint(value)}${wasExisting ? "; updated-existing" : ""}`,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `${wasExisting ? "Updated" : "Added"} secret "${name}" from the system clipboard ` +
+              `(${value.length} chars, ${Object.keys(map).length} total in bundle).\n` +
+              `Bundle re-encrypted at ${PQC_BUNDLE_PATH}. The value was ` +
+              `AES-256-GCM encrypted at rest and audit-logged by fingerprint only.`,
+          },
+        ],
+      };
+    } catch (e: any) {
+      logAuditEvent({
+        action: "add_from_clipboard",
+        name,
+        tabId,
+        error: e?.stderr || e?.message || String(e),
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to add secret "${name}" from clipboard: ${e?.stderr || e?.message || String(e)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   },
 };
 
@@ -917,35 +1059,10 @@ export const secretsRotate: Tool = {
     //    pack always generates fresh randomness, so the bundle
     //    is effectively re-keyed. The recipient pubkey (and its
     //    private key in the keychain) is unchanged.
-    const stdinPayload = secrets
-      .map((s) => `${s.name}=${s.value}`)
-      .join("\n");
-
     try {
-      const { spawn } = await import("node:child_process");
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn(PQC_SECRETS_BIN, ["pack"], {
-          env: {
-            ...process.env,
-            PQC_KEYCHAIN_ACCOUNT:
-              process.env.PQC_KEYCHAIN_ACCOUNT || "pqc-secrets-key",
-          },
-        });
-        let stderr = "";
-        child.stderr.on("data", (d) => (stderr += d.toString()));
-        child.on("close", (code) => {
-          if (code === 0) resolve();
-          else
-            reject(
-              new Error(
-                `pqc-secrets pack exited ${code}: ${stderr || "<no stderr>"}`,
-              ),
-            );
-        });
-        child.on("error", reject);
-        child.stdin.write(stdinPayload);
-        child.stdin.end();
-      });
+      await packSecretsMap(
+        Object.fromEntries(secrets.map((s) => [s.name, s.value])),
+      );
     } catch (e: any) {
       // Restore the backup on pack failure.
       try {

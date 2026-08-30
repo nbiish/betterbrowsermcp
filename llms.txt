@@ -14,12 +14,13 @@ are details.
 
 ## TL;DR
 
-`@nbiish/betterbrowsermcp` is a v0.8.0 Node.js MCP server that drives a
+`@nbiish/betterbrowsermcp` is a v0.9.0 Node.js MCP server that drives a
 real browser (Brave/Chrome) through an extension, with **multi-agent
 routing**, **multi-tab per agent**, **click-to-copy value capture**,
-**SPA-state extraction**, **React-friendly form input**, and
+**SPA-state extraction**, **React-friendly form input**,
 **PQC secrets management** (10 `browser_secrets_*` tools backed by
-ML-KEM-768 + AES-256-GCM, with append-only audit log).
+ML-KEM-768 + AES-256-GCM, with append-only audit log), and **hub
+mode** (one process serves many agents, MCP over Streamable HTTP).
 Drop-in upgrade of `@browsermcp/mcp@0.1.3` with the bugs and rough
 edges fixed.
 
@@ -145,20 +146,21 @@ understanding the original design.
 
 ---
 
-## Current state (v0.8.0)
+## Current state (v0.9.0)
 
 | Repo | main | develop | npm |
 |---|---|---|---|
-| `nbiish/betterbrowsermcp` | v0.8.0 ✓ | v0.8.0 ✓ | `@nbiish/betterbrowsermcp@0.8.0` |
-| `nbiish/betterbrowsermcp-extension` | v0.6.0 ✓ | v0.6.0 ✓ | _not published yet_ |
+| `nbiish/betterbrowsermcp` | v0.9.0 | v0.9.0 | `@nbiish/betterbrowsermcp@0.9.0` |
+| `nbiish/betterbrowsermcp-extension` | v0.9.0 | v0.9.0 | _not published yet_ |
 
-Both repos are on main: betterbrowsermcp ships v0.8.0 (multi-tab
-+ SPA-state + React-friendly form input + PQC secrets with audit
-log); betterbrowsermcp-extension ships v0.6.0 (content script
-with setInputValue + clearInput matching the MCP-server side).
-No v0.7.0 extension work needed — the secrets work is server-side;
-the extension receives loaded secrets via `window.__bbmcpSecrets__`
-+ the `bbmcp:secrets-loaded` CustomEvent.
+v0.9.0 ships **hub mode** (`BROWSER_MCP_HUB=true`: one process,
+many agents, MCP over Streamable HTTP at `/mcp/<agentId>`) and the
+**parallel-tabs contract** (tab adoption, advisory per-tab locks,
+content readiness wait, tab-event polling, background
+`browser_open_tab`). The extension side ships the matching
+`clipboardRead` handler (for `browser_secrets_add_from_clipboard`),
+the console-hook content script, and tab-event push frames.
+Single-agent stdio mode is unchanged and byte-compatible.
 
 ---
 
@@ -244,7 +246,34 @@ LLM: "Now go to OpenAI."
 ```
 
 The LLM never specifies `tabId` for routine work — it just
-manages active tab focus and calls the standard tools.
+manages active tab focus and calls the standard tools. For
+PARALLEL work on multiple tabs (v0.9.0+), pass an explicit
+`tabId` on every call instead of relying on active-tab focus.
+
+---
+
+## Hub mode (v0.9.0+)
+
+Set `BROWSER_MCP_HUB=true` and ONE process serves MANY agents:
+
+```bash
+BROWSER_MCP_HUB=true BROWSER_MCP_PORT=9009 node dist/index.js
+# extension → ws://localhost:9009/ws/<anyAgentId>
+# MCP client → POST JSON-RPC to http://localhost:9009/mcp/<agentId>
+curl http://localhost:9009/
+# health JSON: mode:"hub" + agents[] {agentId, connected, boundTabs}
+```
+
+- Any `/ws/<agentId>` is accepted; the per-agent Context is lazily
+  created on first connect (AgentRegistry). The auth handshake is
+  enforced per Context, same as single-agent mode.
+- MCP is additionally mounted over Streamable HTTP (stateless
+  JSON-RPC) at `/mcp` and `/mcp/<agentId>` on the same HTTP server.
+- Non-loopback `BROWSER_MCP_BIND` REQUIRES
+  `Authorization: Bearer $BROWSER_MCP_AUTH_TOKEN` on `/mcp` — 401
+  otherwise, fail closed (even when no token is configured).
+- stdio is disabled in hub mode (daemon; SIGINT/SIGTERM stops it).
+  Default single-agent stdio mode is byte-compatible with v0.8.x.
 
 ---
 
@@ -271,11 +300,42 @@ manages active tab focus and calls the standard tools.
 
 | Tool | Purpose |
 |---|---|
-| `browser_list_tabs` | List bound tabs with labels + active marker |
-| `browser_open_tab` | Open a new tab and bind it |
+| `browser_list_tabs` | List bound tabs with labels + active marker (+ `windowId`, `activeInWindow` in v0.9.0+) |
+| `browser_open_tab` | Open a new tab and bind it (`makeActive` default false — background by default) |
 | `browser_close_tab` | Close a bound tab |
 | `browser_rename_tab` | Set a human-readable label |
 | `browser_set_active_tab` | Switch the active tab for unspecific calls |
+
+### Parallel-tabs tools (v0.9.0+)
+
+| Tool | Purpose |
+|---|---|
+| `browser_bind_tab` | Adopt an existing tab into the agent's set (no open, no focus) |
+| `browser_unbind_tab` | Release a tab without closing it |
+| `browser_acquire_tab` / `browser_release_tab` | Advisory per-tab locks (TTL 300000ms default, `lockId`, `BUSY` + holder) |
+| `browser_wait_for_content` | Resolve when the content script answers a readiness ping (default 10s) |
+| `browser_poll_events` | Drain buffered `tab_removed` / `tab_updated` / `binding_changed` events (also appended to `list_tabs` / `snapshot` output) |
+
+### CDP cursor tools (Phase 4)
+
+Real OS-level pointer input via CDP `Input.dispatchMouseEvent` —
+fires the full mouseenter/mousedown/mouseup chains that
+hover-reveal/tooltip UIs (masked secret keys, copy buttons) ignore
+when driven by synthetic JS events. Targeting resolves
+`selector` → `ref` (snapshot `@eNN`) → `xy` (viewport CSS px).
+All verbs are pass-through, subject to per-tab advisory locks
+(`TAB_LOCKED`/`BUSY` passthrough), and accept optional `tabId`.
+
+| Tool | Purpose |
+|---|---|
+| `browser_cursor_move` | Move the cursor to selector / ref / absolute xy |
+| `browser_cursor_hover` | Hover element center with real mouseenter/over; `duration_ms` holds position |
+| `browser_cursor_click` | Real click at target (`button` left/right, `count` 1/2) |
+| `browser_cursor_click_hold` | mousedown → `hold_ms` (default 500) → mouseup ("press and hold to reveal") |
+| `browser_cursor_drag` | Real drag: press at `start`, move held, release at `end` |
+| `browser_cursor_scroll` | Real wheel scroll (`deltaY`/`deltaX`, 100 ≈ one notch) at target or viewport |
+| `browser_cursor_submit` | Focus target then Enter / `requestSubmit()` (omit target = focused element) |
+| `browser_cursor_context_menu` | Real right-click at target |
 
 ### React-friendly form input (v0.6.0+)
 
@@ -300,7 +360,7 @@ account=pqc-secrets-key`. Override with `PQC_KEYCHAIN_ACCOUNT`.
 | `browser_secrets_get` | Return one secret's value. `mode: 'plain'\|'redact'` — plain default, redact returns length-only summary |
 | `browser_secrets_load` | Load secrets into the page's `window.__bbmcpSecrets__` scope + fire `bbmcp:secrets-loaded` CustomEvent |
 | `browser_secrets_add` | Add or update a secret. `merge: true\|false` (default true). `dry_run: true` for a preview without writing |
-| `browser_secrets_add_from_clipboard` | Add using system clipboard contents as the value |
+| `browser_secrets_add_from_clipboard` | Add using system clipboard contents as the value (fully implemented in v0.9.0 — extension `clipboardRead` handler + server merge/pack + fingerprint audit) |
 | `browser_secrets_unlock_agent` | Cache a secret in process memory for a specific tab (avoids re-decrypting on every paste) |
 | `browser_secrets_lock_agent` | Clear the unlocked cache for a tab (single name or all) |
 | `browser_secrets_copy_to_page` | Atomic: read + paste into a form field, server-side straight to content script (no conversation history) |
@@ -341,11 +401,13 @@ block listing every available tab.
 |---|---|---|
 | `BROWSER_MCP_AGENT_ID` | `default` | Agent identifier. Used in WS path (`/ws/<id>`) |
 | `BROWSER_MCP_PORT` | `9009` | WebSocket port. Different ports for different agents |
-| `BROWSER_MCP_BIND` | `127.0.0.1` | Bind address. Never set to `0.0.0.0` — exposes browser automation to network |
-| `BROWSER_MCP_AUTH_TOKEN` | _(unset)_ | Optional shared secret for WS handshake |
+| `BROWSER_MCP_BIND` | `localhost` | Bind address. Loopback only by default; non-loopback REQUIRES `BROWSER_MCP_AUTH_TOKEN` on `/mcp` |
+| `BROWSER_MCP_AUTH_TOKEN` | _(unset)_ | Optional shared secret for WS handshake; required for `/mcp` on non-loopback binds |
 | `BROWSER_MCP_WS_PATH_PREFIX` | `/ws` | WS path prefix. Final endpoint: `ws://host:port/ws/<agentId>` |
 | `BROWSER_MCP_AGENT_SEPARATOR` | `__` | Tool name separator (e.g. `hermes__browser_navigate`) |
 | `BROWSER_MCP_NO_KILL_PORT` | `true` | Refuse to silently kill other processes on port collision |
+| `BROWSER_MCP_HUB` | `false` | Hub mode: one process serves many agents (`/ws/<any>` + `/mcp/<agentId>`) |
+| `BROWSER_MCP_PQC_SECRETS_BIN` | _(auto)_ | pqc-secrets binary override. Order: env → `which` → `~/.local/bin` → `/usr/local/bin` → legacy; winner logged to stderr once |
 
 ---
 
@@ -358,13 +420,17 @@ betterbrowsermcp/
 ├── package.json                v0.3.0, ESM, deps for standalone build
 ├── tsconfig.json               paths alias: @/* → src/*
 ├── src/
-│   ├── config.ts               env var resolution, WS URL helpers
-│   ├── context.ts              per-process Context (one WS = one tab)
+│   ├── config.ts               env var resolution, WS URL helpers, hub/loopback
+│   ├── context.ts              per-agent Context (one WS = one agent)
+│   ├── registry.ts             AgentRegistry: agentId → Context (hub mode)
+│   ├── events.ts               per-agent tab-event ring buffer (cap 200)
 │   ├── messaging.ts            WS protocol (request/response correlation)
 │   ├── types.ts                Zod tool schemas (browser_* + manage_*)
-│   ├── server.ts               MCP server, tool dispatch
-│   ├── ws.ts                   WebSocket server with auth handshake
-│   ├── index.ts                entry point + multi-process banner
+│   ├── server.ts               MCP server, tool dispatch (shared)
+│   ├── toolset.ts              the full tool list (stdio + HTTP)
+│   ├── http.ts                 MCP over Streamable HTTP (/mcp/<agentId>)
+│   ├── ws.ts                   WebSocket server, hub routing, health JSON
+│   ├── index.ts                entry point (single-agent stdio / hub daemon)
 │   ├── tools/
 │   │   ├── common.ts           navigate, goBack, goForward, pressKey, wait
 │   │   ├── snapshot.ts         snapshot, click, hover, type, selectOption

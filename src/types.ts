@@ -20,6 +20,11 @@ import { z } from "zod";
  * Optional tab selector. When omitted, the extension routes the
  * tool call to the agent's active tab (or the first bound tab).
  * Pass a specific tabId to target a particular bound tab.
+ *
+ * v0.9.0+: when driving MULTIPLE tabs (across agents or concurrently),
+ * pass an explicit tabId on EVERY call instead of relying on the
+ * active tab — another agent or tool may switch focus underneath you.
+ * Use browser_bind_tab + explicit tabIds for parallel work.
  */
 const TabIdParam = z
   .number()
@@ -27,7 +32,7 @@ const TabIdParam = z
   .positive()
   .optional()
   .describe(
-    "Optional tab ID to target. When omitted, routes to the agent's active tab. Use browser_list_tabs to see available tab IDs.",
+    "Optional tab ID to target. When omitted, routes to the agent's active tab. Use browser_list_tabs to see available tab IDs. When driving multiple tabs in parallel, pass an explicit tabId on EVERY call — the active tab can change between calls.",
   );
 
 const ElementSchema = z.object({
@@ -170,7 +175,107 @@ export const GetConsoleLogsTool = z.object({
 export const ListTabsTool = z.object({
   name: z.literal("browser_list_tabs"),
   description: z.literal(
-    "List all browser tabs bound to this agent. Returns tabId, label, URL, title, and which one is the agent's active tab. Use this to discover what's available before issuing tool calls that need a specific tab.",
+    "List all browser tabs bound to this agent. Returns tabId, label, URL, title, the agent's active tab, and per-tab windowId + activeInWindow (v0.9.0+). Also drains and appends any buffered tab events (tab_removed/tab_updated/binding_changed) as one-liners so changes are noticed without polling. Use this to discover what's available before issuing tool calls that need a specific tab.",
+  ),
+  arguments: z.object({}),
+});
+
+// ============================================================
+//  Tab adoption, advisory locks & readiness (v0.9.0+)
+// ============================================================
+
+export const BindTabTool = z.object({
+  name: z.literal("browser_bind_tab"),
+  description: z.literal(
+    "Adopt (bind) an existing browser tab into this agent's bound set WITHOUT opening or focusing it — agent-side adoption. Use when a tab the user already has open should be driven by this agent. Returns the tabId and a label. Afterwards, drive the tab with explicit tabId on every call.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to bind to this agent."),
+  }),
+});
+
+export const UnbindTabTool = z.object({
+  name: z.literal("browser_unbind_tab"),
+  description: z.literal(
+    "Release a tab from this agent's bound set without closing it (agent-side release). The tab stays open in the browser; this agent just stops routing calls to it. Any advisory lock held on the tab is released too.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to unbind from this agent."),
+  }),
+});
+
+export const AcquireTabTool = z.object({
+  name: z.literal("browser_acquire_tab"),
+  description: z.literal(
+    "Acquire an advisory per-tab lock before driving a tab that other agents may also target. Returns {ok:true, lockId} on success or {ok:false, error:'BUSY', holder} when another agent holds the lock (the holder bypasses the check). Locks are advisory — held in extension memory with a TTL (default 300000ms = 5min) — checked before executing tab ops. Release with browser_release_tab.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to lock."),
+    ttlMs: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .default(300000)
+      .describe(
+        "Lock time-to-live in milliseconds. Default 300000 (5 minutes). The lock auto-expires after the TTL.",
+      ),
+  }),
+});
+
+export const ReleaseTabTool = z.object({
+  name: z.literal("browser_release_tab"),
+  description: z.literal(
+    "Release a previously acquired advisory per-tab lock. Pass the lockId returned by browser_acquire_tab if you have it; omitting it releases the caller's lock on the tab.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID whose lock should be released."),
+    lockId: z
+      .string()
+      .optional()
+      .describe(
+        "The lockId returned by browser_acquire_tab. If omitted, the caller's lock on this tab is released.",
+      ),
+  }),
+});
+
+export const WaitForContentTool = z.object({
+  name: z.literal("browser_wait_for_content"),
+  description: z.literal(
+    "Wait until the target tab's content script answers a readiness ping (page has fresh content-script injection). Resolves with {ok, url, title}. Replaces sleep-and-retry after browser_open_tab or browser_navigate on slow SPAs. Timeout default 10 seconds.",
+  ),
+  arguments: z.object({
+    tabId: TabIdParam,
+    timeoutS: z
+      .number()
+      .optional()
+      .default(10)
+      .describe(
+        "Maximum seconds to wait for content-script readiness. Default 10.",
+      ),
+  }),
+});
+
+export const PollEventsTool = z.object({
+  name: z.literal("browser_poll_events"),
+  description: z.literal(
+    "Drain this agent's buffered tab events (tab_removed, tab_updated, binding_changed) captured from the extension. Returns AND clears the buffer (bounded ring, server-side, cap 200). Call this between operations on long sessions — or rely on browser_list_tabs / browser_snapshot, which also append buffered events to their output.",
   ),
   arguments: z.object({}),
 });
@@ -178,7 +283,7 @@ export const ListTabsTool = z.object({
 export const OpenTabTool = z.object({
   name: z.literal("browser_open_tab"),
   description: z.literal(
-    "Open a new browser tab and bind it to this agent. Optionally provide a URL (will navigate after open) and a human-readable label (the LLM uses the label to refer to the tab in subsequent calls). The new tab is set as the agent's active tab.",
+    "Open a new browser tab and bind it to this agent. Optionally provide a URL (will navigate after open) and a human-readable label (the LLM uses the label to refer to the tab in subsequent calls). By default (makeActive=false) the tab is bound but NOT focused — the active tab is unchanged and the browser stays on whatever the user is looking at; pass makeActive=true to make it the agent's active tab. When opening background tabs, keep using explicit tabId on subsequent calls.",
   ),
   arguments: z.object({
     url: z
@@ -190,6 +295,13 @@ export const OpenTabTool = z.object({
       .optional()
       .describe(
         "Human-readable label for this tab (e.g. 'Stripe dashboard', 'OpenAI console'). If omitted, the tab's hostname or title is used.",
+      ),
+    makeActive: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "If true, the new tab becomes the agent's active tab (and may steal browser focus). Default false — the tab is opened in the background and the active tab is unchanged. Never force-set active unless explicitly needed.",
       ),
   }),
 });
@@ -430,12 +542,13 @@ export const SecretsAddTool = z.object({
 export const SecretsAddFromClipboardTool = z.object({
   name: z.literal("browser_secrets_add_from_clipboard"),
   description: z.literal(
-    "Add a secret to the PQC bundle using the current system clipboard contents as the value. Use this after a user has selected/copied a key from a dashboard (Stripe, GitHub, etc.) and wants to store it encrypted. NOTE: v0.7.0 ships as a stub — the full implementation needs a small extension-side clipboard read handler; scheduled for v0.7.1.",
+    "Add a secret to the PQC bundle using the current system clipboard contents as the value. The extension's content script reads the system clipboard text and the server merges+re-encrypts the bundle. Use this after a 'Click to copy' button or manual copy of a key (Stripe, GitHub, etc.). IMPORTANT: copy the value to the clipboard FIRST (click the copy button or Cmd+C), then call this tool. The value is encrypted at rest and audit-logged by fingerprint only.",
   ),
   arguments: z.object({
     name: z
       .string()
       .describe("Secret name to add/update with the clipboard value."),
+    tabId: TabIdParam,
   }),
 });
 
@@ -588,6 +701,173 @@ export const SecretsRotateTool = z.object({
   arguments: z.object({}),
 });
 
+// ============================================================
+//  CDP cursor tools (Phase 4) — real OS-level pointer input
+//
+//  Pass-through verbs backed by the extension's CDP cursor
+//  primitive (docs/cursor-primitive.md). The server forwards the
+//  payload verbatim (including optional tabId); the extension
+//  resolves targeting and executes Input.dispatchMouseEvent /
+//  Input.dispatchKeyEvent.
+// ============================================================
+
+/**
+ * Shared optional targeting fragment. Resolution order at the
+ * extension: `selector` → `ref` → `xy` (absolute viewport CSS px).
+ * At least one must resolve; otherwise ELEMENT_NOT_FOUND-class
+ * errors come back pass-through.
+ */
+const CursorTarget = {
+  selector: z
+    .string()
+    .optional()
+    .describe(
+      "CSS selector scoped to the document. Preferred over ref/xy when known (text or ARIA selectors beat fragile paths).",
+    ),
+  ref: z
+    .string()
+    .optional()
+    .describe(
+      "Element reference from a fresh ARIA snapshot (e.g. 'e14' or '@e14'). Mapped to the underlying DOM node via the snapshot.",
+    ),
+  x: z
+    .number()
+    .optional()
+    .describe("Absolute viewport X coordinate in CSS pixels (origin: top-left)."),
+  y: z
+    .number()
+    .optional()
+    .describe("Absolute viewport Y coordinate in CSS pixels (origin: top-left)."),
+};
+
+export const CursorMoveTool = z.object({
+  name: z.literal("browser_cursor_move"),
+  description: z.literal(
+    "Move the mouse cursor to a target. Fires a REAL OS-level mouseMoved event via CDP — hover-reveal and tooltip UIs that ignore synthetic JS events respond correctly. Targeting resolution: selector → ref → xy (viewport coordinates). Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorHoverTool = z.object({
+  name: z.literal("browser_cursor_hover"),
+  description: z.literal(
+    "Hover the cursor at the target (element center) using REAL OS-level input — fires the mouseenter/mouseover chain CDP users get. Fixes hover-reveal UIs (masked secret keys, copy buttons, CSS dropdowns) that synthetic hover cannot trigger. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    duration_ms: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "How long to hold the hover position before returning, in ms. Some CSS-only menus need a held position (or slight movement after arrival) before revealing.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorClickTool = z.object({
+  name: z.literal("browser_cursor_click"),
+  description: z.literal(
+    "Move the cursor to the target and perform a REAL OS-level mouse click (CDP mousePressed + mouseReleased — the full mousedown/mouseup/enter/over chain). Use instead of browser_click when the page only reacts to real pointer input (hover-gated UIs, React pointer handlers). button: left (default) or right; count: 1 (default) or 2 for double-click. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    button: z
+      .enum(["left", "right"])
+      .optional()
+      .describe("Mouse button. Default left."),
+    count: z
+      .union([z.literal(1), z.literal(2)])
+      .optional()
+      .describe("Click count: 1 (default) or 2 for double-click."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorClickHoldTool = z.object({
+  name: z.literal("browser_cursor_click_hold"),
+  description: z.literal(
+    "Press and hold: move to the target, REAL mousedown, wait hold_ms (default 500), mouseup. For 'press and hold to reveal secret' UIs and drag initiation where a plain click is swallowed. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    hold_ms: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .default(500)
+      .describe(
+        "Milliseconds between mousedown and mouseup. Default 500.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorDragTool = z.object({
+  name: z.literal("browser_cursor_drag"),
+  description: z.literal(
+    "REAL OS-level mouse drag: mousePressed at start → mouseMoved to end (button held) → mouseReleased. Single chord, no intermediate stops. For sliders, canvas drawing, sortable lists. Each endpoint resolves independently: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    start: z
+      .object({ ...CursorTarget })
+      .describe("Drag origin. Resolution: selector → ref → xy."),
+    end: z
+      .object({ ...CursorTarget })
+      .describe("Drag destination. Resolution: selector → ref → xy."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorScrollTool = z.object({
+  name: z.literal("browser_cursor_scroll"),
+  description: z.literal(
+    "REAL mouse-wheel scroll (CDP mouseWheel) at a target element or the viewport. deltaY/deltaX in wheel units — positive scrolls down/right, 100 ≈ one notch. Scrolls inner containers (tables, panes) that window-level scrolling misses. Targeting resolution: selector → ref → xy (all optional; viewport when omitted). Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    deltaY: z
+      .number()
+      .describe(
+        "Vertical wheel delta. Positive = scroll down. 100 ≈ one notch.",
+      ),
+    deltaX: z
+      .number()
+      .optional()
+      .describe("Horizontal wheel delta. Positive = scroll right."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorSubmitTool = z.object({
+  name: z.literal("browser_cursor_submit"),
+  description: z.literal(
+    "Submit a form or fire Enter on the focused element (real CDP Enter keyDown/keyUp, or requestSubmit). Pass selector/ref to focus the target first; omit targeting to submit whatever is currently focused. Targeting resolution: selector → ref. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    selector: CursorTarget.selector,
+    ref: CursorTarget.ref,
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorContextMenuTool = z.object({
+  name: z.literal("browser_cursor_context_menu"),
+  description: z.literal(
+    "REAL OS-level right-click at the target (CDP mousePressed right + mouseReleased right) to open the context menu. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    tabId: TabIdParam,
+  }),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -611,6 +891,13 @@ export const MCPTool = z.discriminatedUnion("name", [
   CloseTabTool,
   RenameTabTool,
   SetActiveTabTool,
+  // Tab adoption, advisory locks & readiness (v0.9.0+)
+  BindTabTool,
+  UnbindTabTool,
+  AcquireTabTool,
+  ReleaseTabTool,
+  WaitForContentTool,
+  PollEventsTool,
   // Clipboard
   CopyToClipboardTool,
   // Extraction & SPA-state (v0.5.0+)
@@ -633,4 +920,13 @@ export const MCPTool = z.discriminatedUnion("name", [
   SecretsLockAgentTool,
   SecretsCopyToPageTool,
   SecretsRotateTool,
+  // CDP cursor (Phase 4)
+  CursorMoveTool,
+  CursorHoverTool,
+  CursorClickTool,
+  CursorClickHoldTool,
+  CursorDragTool,
+  CursorScrollTool,
+  CursorSubmitTool,
+  CursorContextMenuTool,
 ]);

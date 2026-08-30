@@ -54,11 +54,17 @@ export const navigate: ToolFactory = (snapshot) => ({
       const snap = await captureAriaSnapshot(context, tabId);
       return snap;
     }
+    // v0.9.0: the extension waits for content-script readiness before
+    // replying and includes the loaded page's title in the result.
+    const titleSuffix =
+      result?.title && typeof result.title === "string"
+        ? ` (title: "${result.title}")`
+        : "";
     return {
       content: [
         {
           type: "text",
-          text: `Navigated to ${url}${tabSuffix(result)}`,
+          text: `Navigated to ${url}${titleSuffix}${tabSuffix(result)}`,
         },
       ],
     };

@@ -122,15 +122,47 @@ LLM: "Now switch to the OpenAI console and grab the API key."
 
 The two compose: spawn N MCP processes (multi-agent), each connects to the same browser with M tabs (multi-tab), and the LLM picks which `(agent, tab)` pair to drive for each tool call.
 
+### Parallel-tabs tools (v0.9.0+)
+
+| Tool | Purpose |
+|---|---|
+| `browser_bind_tab` | Adopt an existing tab into the agent's bound set (no open, no focus) |
+| `browser_unbind_tab` | Release a tab without closing it |
+| `browser_acquire_tab` | Advisory per-tab lock (`ttlMs`, default 300000; returns `lockId` or `BUSY` + holder) |
+| `browser_release_tab` | Release the advisory lock |
+| `browser_wait_for_content` | Resolve when the tab's content script answers a readiness ping (default 10s) |
+| `browser_poll_events` | Drain buffered `tab_removed`/`tab_updated`/`binding_changed` events (also appended to `list_tabs`/`snapshot` output) |
+
+`browser_open_tab` gains `makeActive` (default **false**) — background tabs by default; pass `true` only when you actually want focus. When driving multiple tabs, pass explicit `tabId` on every call.
+
+## Hub mode (v0.9.0+)
+
+One process can now serve MANY agents:
+
+```bash
+BROWSER_MCP_HUB=true BROWSER_MCP_PORT=9009 node dist/index.js
+# extension connects to ws://localhost:9009/ws/<anyAgentId>
+# MCP clients POST JSON-RPC to http://localhost:9009/mcp/<agentId>
+curl http://localhost:9009/
+# {"mode":"hub",...,"agents":[{"agentId":"hermes","connected":true,"boundTabs":2}, ...]}
+```
+
+- Any `/ws/<agentId>` is accepted; the per-agent Context is lazily created on first connect. The auth handshake (`{type:"auth", token}`) is enforced per Context, exactly like single-agent mode.
+- MCP is also mounted over **Streamable HTTP** on the same HTTP server: `POST /mcp/<agentId>` (stateless JSON-RPC; each request dispatches against that agent's Context).
+- Security: on a non-loopback `BROWSER_MCP_BIND`, `/mcp` **requires** `Authorization: Bearer $BROWSER_MCP_AUTH_TOKEN` (401 otherwise, fail closed — including when no token is configured).
+- stdio is disabled in hub mode; the process is a daemon (SIGINT/SIGTERM to stop). Single-agent mode (default) is unchanged and byte-compatible.
+
 ## Environment variables
 
 | Var | Default | Description |
 |---|---|---|
 | `BROWSER_MCP_AGENT_ID` | `default` | Agent identifier. Used in the WS path (`/ws/<id>`) so the extension can route tab bindings. |
 | `BROWSER_MCP_PORT` | `9009` | WebSocket port to bind. Use different ports for different agents. |
-| `BROWSER_MCP_BIND` | `127.0.0.1` | Bind address. **Never** set to `0.0.0.0` — exposes browser automation to the network. |
-| `BROWSER_MCP_AUTH_TOKEN` | _(unset)_ | Optional shared secret. If set, the extension must send `{type:"auth", token:"..."}` as its first WS message, else the connection is closed with 4401. |
+| `BROWSER_MCP_BIND` | `localhost` | Bind address. Loopback only by default — a non-loopback value **requires** `BROWSER_MCP_AUTH_TOKEN` (MCP-over-HTTP returns 401 without it; fail closed). |
+| `BROWSER_MCP_AUTH_TOKEN` | _(unset)_ | Optional shared secret. If set, the extension must send `{type:"auth", token:"..."}` as its first WS message, else the connection is closed with 4401. Required for `/mcp` when bound non-loopback. |
 | `BROWSER_MCP_WS_PATH_PREFIX` | `/ws` | Path prefix for the WS endpoint. Default `/ws` means the agent's endpoint is at `/ws/<agentId>`. |
+| `BROWSER_MCP_HUB` | `false` | Hub mode (v0.9.0+). `true` = one process serves many agents (see [Hub mode](#hub-mode-v090)). |
+| `BROWSER_MCP_PQC_SECRETS_BIN` | _(auto)_ | Override for the `pqc-secrets` binary path. Resolution order: this env → `which pqc-secrets` → `~/.local/bin` → `/usr/local/bin` → legacy `~/code/ainish-coder/bin`. The winner is logged to stderr once. |
 
 ---
 
@@ -197,14 +229,18 @@ curl http://127.0.0.1:9099/
 
 ```
 src/
-  config.ts           env var resolution, WS URL helpers
-  context.ts          per-process Context (one WebSocket = one tab)
+  config.ts           env var resolution, WS URL helpers, hub/loopback config
+  context.ts          per-agent Context (one WebSocket = one agent's tabs)
+  registry.ts         AgentRegistry (agentId → Context, hub mode)
+  events.ts           bounded per-agent tab-event ring buffer (cap 200)
   messaging.ts        WS message protocol (inlined from upstream)
-  server.ts           MCP server, tool routing
+  server.ts           MCP server, tool routing (shared by both transports)
+  toolset.ts          the full tool list (stdio + HTTP MCP)
+  http.ts             MCP over Streamable HTTP at /mcp(/<agentId>)
   tools/              tool implementations (navigate, click, etc.)
   utils.ts            helpers (wait, port check)
-  ws.ts               WebSocket server with auth handshake
-  index.ts            entry point
+  ws.ts               WebSocket server + hub routing + health JSON
+  index.ts            entry point (single-agent stdio / hub daemon)
   types.ts            Zod schemas (inlined from upstream's monorepo)
 ```
 
