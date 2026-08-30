@@ -1,4 +1,5 @@
 import { Context } from "@/context";
+import { formatEventOneLiners } from "@/events";
 import { ToolResult } from "@/tools/tool";
 
 /**
@@ -47,6 +48,15 @@ export async function captureAriaSnapshot(
     tabsBlock = `\n- Bound tabs for this agent:\n${lines.join("\n")}\n`;
   }
 
+  // v0.9.0+: append any buffered extension events (tab_removed,
+  // tab_updated, binding_changed) so agents notice tab changes while
+  // snapshotting, without a separate browser_poll_events call. This
+  // drains the buffer.
+  const eventLines = formatEventOneLiners(context.drainEvents());
+  const eventsBlock = eventLines.length
+    ? `- Recent tab events (${eventLines.length} drained):\n${eventLines.map((l) => `  ${l}`).join("\n")}\n`
+    : "";
+
   return {
     content: [
       {
@@ -54,7 +64,7 @@ export async function captureAriaSnapshot(
         text: `${status ? `${status}\n` : ""}
 - Page URL: ${typeof url === "object" ? url.url : url}
 - Page Title: ${typeof title === "object" ? title.title : title}
-${tabsBlock}
+${tabsBlock}${eventsBlock}
 - Page Snapshot
 \`\`\`yaml
 ${typeof snapshot === "object" ? snapshot.snapshot : snapshot}

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0 — 2026-08-30 — hub mode + parallel tabs
+
+### Added
+- **Hub mode** (`BROWSER_MCP_HUB=true`): one process serves many agents. Any `/ws/<agentId>` is routed to a per-agent Context lazily created on first connect (`src/registry.ts` AgentRegistry). Auth handshake enforced per Context. Single-agent stdio mode is unchanged and byte-compatible
+- **MCP over Streamable HTTP** (`src/http.ts`): `POST /mcp` and `POST /mcp/<agentId>` on the same HTTP server (stateless JSON-RPC via `StreamableHTTPServerTransport`). On a non-loopback `BROWSER_MCP_BIND`, requests **require** `Authorization: Bearer $BROWSER_MCP_AUTH_TOKEN` (401 otherwise, fail closed even with no token configured)
+- `GET /` health JSON gains `mode: "hub"|"single"` and `agents[]` with `{agentId, connected, boundTabs}`
+- `browser_bind_tab` / `browser_unbind_tab`: agent-side adoption/release of existing tabs (no open, no focus)
+- `browser_acquire_tab` / `browser_release_tab`: advisory per-tab locks (TTL default 300000ms, `lockId`, `BUSY` + holder on conflict, holder bypasses)
+- `browser_wait_for_content`: resolves when the content script answers a readiness ping (`timeoutS`, default 10)
+- `browser_poll_events`: drains the per-agent buffered extension events (`tab_removed`, `tab_updated`, `binding_changed`); bounded ring buffer cap 200, server-side (`src/events.ts`). Buffered events are also appended (and cleared) on `browser_list_tabs` and `browser_snapshot` output
+- `browser_open_tab` gains `makeActive` (default **false** — background tabs; never force-set the active tab)
+- `browser_list_tabs` passes through new per-tab fields `windowId` and `activeInWindow`
+- `browser_navigate` (non-snapshot) surfaces the loaded page's `title` from the extension's readiness-aware reply
+- `browser_secrets_add_from_clipboard` fully implemented: extension returns the system clipboard text (`{name, tabId}` → `{ok, value}`), server merges + re-packs the bundle, audit-logs by fingerprint (was a v0.7.0 stub)
+- `pqc-secrets` binary resolution order: `BROWSER_MCP_PQC_SECRETS_BIN` → `which pqc-secrets` → `~/.local/bin` → `/usr/local/bin` → legacy `~/code/ainish-coder/bin`; winner logged to stderr once (was hardcoded to the legacy path)
+
+### Changed
+- `BROWSER_MCP_BIND` default is now `localhost` (the previous committed default was a placeholder string that failed to bind at runtime)
+- Tool descriptions push explicit `tabId` usage when driving multiple tabs in parallel
+- Hub mode runs as a daemon (no stdio); single-agent mode unchanged
+
 ## 0.8.0 — 2026-06-10 — availability-first PQC safety rails
 
 ### Added

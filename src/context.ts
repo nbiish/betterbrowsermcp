@@ -15,6 +15,7 @@
 import { WebSocket } from "ws";
 
 import { mcpConfig } from "@/config";
+import { EventBuffer, type BrowserEvent } from "@/events";
 import {
   createSocketMessageSender,
   type MessagePayload,
@@ -29,6 +30,12 @@ export class Context {
   public readonly agentId: string;
   /** Auth state — true once the extension sends a valid token. */
   private _authenticated: boolean;
+  /**
+   * Buffered extension push events ({type:"event"} frames), drained by
+   * browser_poll_events and appended to list_tabs/snapshot outputs.
+   * Bounded ring buffer, server-side memory only (cap 200).
+   */
+  public readonly events = new EventBuffer();
 
   constructor(agentId: string) {
     this.agentId = agentId;
@@ -79,6 +86,16 @@ export class Context {
 
   markAuthenticated(): void {
     this._authenticated = true;
+  }
+
+  /** Push an extension event into this agent's bounded buffer. */
+  pushEvent(event: BrowserEvent): void {
+    this.events.push(event);
+  }
+
+  /** Drain (return + clear) this agent's buffered events. */
+  drainEvents(): BrowserEvent[] {
+    return this.events.drain();
   }
 
   /**

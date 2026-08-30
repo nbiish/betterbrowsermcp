@@ -20,6 +20,11 @@ import { z } from "zod";
  * Optional tab selector. When omitted, the extension routes the
  * tool call to the agent's active tab (or the first bound tab).
  * Pass a specific tabId to target a particular bound tab.
+ *
+ * v0.9.0+: when driving MULTIPLE tabs (across agents or concurrently),
+ * pass an explicit tabId on EVERY call instead of relying on the
+ * active tab — another agent or tool may switch focus underneath you.
+ * Use browser_bind_tab + explicit tabIds for parallel work.
  */
 const TabIdParam = z
   .number()
@@ -27,7 +32,7 @@ const TabIdParam = z
   .positive()
   .optional()
   .describe(
-    "Optional tab ID to target. When omitted, routes to the agent's active tab. Use browser_list_tabs to see available tab IDs.",
+    "Optional tab ID to target. When omitted, routes to the agent's active tab. Use browser_list_tabs to see available tab IDs. When driving multiple tabs in parallel, pass an explicit tabId on EVERY call — the active tab can change between calls.",
   );
 
 const ElementSchema = z.object({
@@ -170,7 +175,107 @@ export const GetConsoleLogsTool = z.object({
 export const ListTabsTool = z.object({
   name: z.literal("browser_list_tabs"),
   description: z.literal(
-    "List all browser tabs bound to this agent. Returns tabId, label, URL, title, and which one is the agent's active tab. Use this to discover what's available before issuing tool calls that need a specific tab.",
+    "List all browser tabs bound to this agent. Returns tabId, label, URL, title, the agent's active tab, and per-tab windowId + activeInWindow (v0.9.0+). Also drains and appends any buffered tab events (tab_removed/tab_updated/binding_changed) as one-liners so changes are noticed without polling. Use this to discover what's available before issuing tool calls that need a specific tab.",
+  ),
+  arguments: z.object({}),
+});
+
+// ============================================================
+//  Tab adoption, advisory locks & readiness (v0.9.0+)
+// ============================================================
+
+export const BindTabTool = z.object({
+  name: z.literal("browser_bind_tab"),
+  description: z.literal(
+    "Adopt (bind) an existing browser tab into this agent's bound set WITHOUT opening or focusing it — agent-side adoption. Use when a tab the user already has open should be driven by this agent. Returns the tabId and a label. Afterwards, drive the tab with explicit tabId on every call.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to bind to this agent."),
+  }),
+});
+
+export const UnbindTabTool = z.object({
+  name: z.literal("browser_unbind_tab"),
+  description: z.literal(
+    "Release a tab from this agent's bound set without closing it (agent-side release). The tab stays open in the browser; this agent just stops routing calls to it. Any advisory lock held on the tab is released too.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to unbind from this agent."),
+  }),
+});
+
+export const AcquireTabTool = z.object({
+  name: z.literal("browser_acquire_tab"),
+  description: z.literal(
+    "Acquire an advisory per-tab lock before driving a tab that other agents may also target. Returns {ok:true, lockId} on success or {ok:false, error:'BUSY', holder} when another agent holds the lock (the holder bypasses the check). Locks are advisory — held in extension memory with a TTL (default 300000ms = 5min) — checked before executing tab ops. Release with browser_release_tab.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID to lock."),
+    ttlMs: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .default(300000)
+      .describe(
+        "Lock time-to-live in milliseconds. Default 300000 (5 minutes). The lock auto-expires after the TTL.",
+      ),
+  }),
+});
+
+export const ReleaseTabTool = z.object({
+  name: z.literal("browser_release_tab"),
+  description: z.literal(
+    "Release a previously acquired advisory per-tab lock. Pass the lockId returned by browser_acquire_tab if you have it; omitting it releases the caller's lock on the tab.",
+  ),
+  arguments: z.object({
+    tabId: z
+      .number()
+      .int()
+      .positive()
+      .describe("Tab ID whose lock should be released."),
+    lockId: z
+      .string()
+      .optional()
+      .describe(
+        "The lockId returned by browser_acquire_tab. If omitted, the caller's lock on this tab is released.",
+      ),
+  }),
+});
+
+export const WaitForContentTool = z.object({
+  name: z.literal("browser_wait_for_content"),
+  description: z.literal(
+    "Wait until the target tab's content script answers a readiness ping (page has fresh content-script injection). Resolves with {ok, url, title}. Replaces sleep-and-retry after browser_open_tab or browser_navigate on slow SPAs. Timeout default 10 seconds.",
+  ),
+  arguments: z.object({
+    tabId: TabIdParam,
+    timeoutS: z
+      .number()
+      .optional()
+      .default(10)
+      .describe(
+        "Maximum seconds to wait for content-script readiness. Default 10.",
+      ),
+  }),
+});
+
+export const PollEventsTool = z.object({
+  name: z.literal("browser_poll_events"),
+  description: z.literal(
+    "Drain this agent's buffered tab events (tab_removed, tab_updated, binding_changed) captured from the extension. Returns AND clears the buffer (bounded ring, server-side, cap 200). Call this between operations on long sessions — or rely on browser_list_tabs / browser_snapshot, which also append buffered events to their output.",
   ),
   arguments: z.object({}),
 });
@@ -178,7 +283,7 @@ export const ListTabsTool = z.object({
 export const OpenTabTool = z.object({
   name: z.literal("browser_open_tab"),
   description: z.literal(
-    "Open a new browser tab and bind it to this agent. Optionally provide a URL (will navigate after open) and a human-readable label (the LLM uses the label to refer to the tab in subsequent calls). The new tab is set as the agent's active tab.",
+    "Open a new browser tab and bind it to this agent. Optionally provide a URL (will navigate after open) and a human-readable label (the LLM uses the label to refer to the tab in subsequent calls). By default (makeActive=false) the tab is bound but NOT focused — the active tab is unchanged and the browser stays on whatever the user is looking at; pass makeActive=true to make it the agent's active tab. When opening background tabs, keep using explicit tabId on subsequent calls.",
   ),
   arguments: z.object({
     url: z
@@ -190,6 +295,13 @@ export const OpenTabTool = z.object({
       .optional()
       .describe(
         "Human-readable label for this tab (e.g. 'Stripe dashboard', 'OpenAI console'). If omitted, the tab's hostname or title is used.",
+      ),
+    makeActive: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "If true, the new tab becomes the agent's active tab (and may steal browser focus). Default false — the tab is opened in the background and the active tab is unchanged. Never force-set active unless explicitly needed.",
       ),
   }),
 });
@@ -430,12 +542,13 @@ export const SecretsAddTool = z.object({
 export const SecretsAddFromClipboardTool = z.object({
   name: z.literal("browser_secrets_add_from_clipboard"),
   description: z.literal(
-    "Add a secret to the PQC bundle using the current system clipboard contents as the value. Use this after a user has selected/copied a key from a dashboard (Stripe, GitHub, etc.) and wants to store it encrypted. NOTE: v0.7.0 ships as a stub — the full implementation needs a small extension-side clipboard read handler; scheduled for v0.7.1.",
+    "Add a secret to the PQC bundle using the current system clipboard contents as the value. The extension's content script reads the system clipboard text and the server merges+re-encrypts the bundle. Use this after a 'Click to copy' button or manual copy of a key (Stripe, GitHub, etc.). IMPORTANT: copy the value to the clipboard FIRST (click the copy button or Cmd+C), then call this tool. The value is encrypted at rest and audit-logged by fingerprint only.",
   ),
   arguments: z.object({
     name: z
       .string()
       .describe("Secret name to add/update with the clipboard value."),
+    tabId: TabIdParam,
   }),
 });
 
@@ -611,6 +724,13 @@ export const MCPTool = z.discriminatedUnion("name", [
   CloseTabTool,
   RenameTabTool,
   SetActiveTabTool,
+  // Tab adoption, advisory locks & readiness (v0.9.0+)
+  BindTabTool,
+  UnbindTabTool,
+  AcquireTabTool,
+  ReleaseTabTool,
+  WaitForContentTool,
+  PollEventsTool,
   // Clipboard
   CopyToClipboardTool,
   // Extraction & SPA-state (v0.5.0+)
