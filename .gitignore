@@ -1,59 +1,174 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# AINISH Coder Tooling Distribution - Git Ignore Patterns
+# PlatformIO ignore patterns
 
-# Dependencies
-node_modules
-.pnp
-.pnp.js
+# PlatformIO ignore patterns
+.pio*
+.pio/
+*.pioenvs/
+pio.ini
 
-# Local env files
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Environment and configuration files
+.env
+.env.*
+!.env.example
+*.env.local
+*.env.development
+*.env.test
+*.env.production
 
-# Testing
-coverage
+# Virtual environments
+venv/
+venv.bak/
+venv.bak*
+venv.*
+.venv/
+ENV/
+env/
+.conda/
+.python-version
+*/.env
+*/*env.*
+!*env.example
 
-# Turbo
-.turbo
+# IDE and editor files
+.vscode/
+*.sublime-project
+*.sublime-workspace
 
-# Vercel
-.vercel
-
-# Build Outputs
-.next/
-out/
-build
-dist
-
-# Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Misc
+# OS generated files
 .DS_Store
+.DS_Store?
+
+# Security and secrets
+*.key
 *.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+.secrets
 
-# === Hermes / user-context-leak guards ===
-# The terminal tool's "subdirectory context discovery" can drop
-# AGENTS.md, llms.txt, and .agents/ into the working tree of a
-# freshly-cloned repo (the user's GLOBAL workflow files). We block
-# .agents/ wholesale. AGENTS.md and llms.txt are intentionally
-# NOT blocked — this repo has its own AGENTS.md and llms.txt as
-# project documentation. To avoid accidentally committing a
-# Hermes-injected copy, audit staged files before each commit and
-# verify the AGENTS.md / llms.txt content matches the repo's own
-# authoring (not the user's ~/.hermes/ templates).
-.agents/*
-# Repo-owned agent skills ARE tracked (.agents/skills/bbmcp — the
-# zero-wiring onboarding playbook + connect helper). Everything else
-# under .agents/ (tasks/, injected copies, etc.) stays ignored.
-!.agents/skills/
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
 
-# Hermes / agent plan directories (auto-injected by subdirectory
-# context discovery — never intended for git)
+# Backup files
+*.bak
+*.backup
+*.backup.*
+*.old
+*.orig
+*.rej
+*.orig
+*.swp
+*.swo
+
+# Rust
+target/
+
+# Python
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Shared Libraries
+*.so
+*.dylib
+*.dll
+
+# General
+*.log
+*.tmp
+*.new
+tmp/
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnpm-debug.log
+
+# Security reports
+SECURITY_REPORT.md
+
+# Scrolls Lab runtime artifacts
+scrolls-lab/logs/
+scrolls-lab/reference/
+scrolls-lab/omni_output/
+scrolls-lab/sections/
+scrolls-lab/working/
+scrolls-lab/original/
+scrolls-lab/output/
+*.patch
+
+# Omni Extractor media files (global safety)
+**/*.jpg
+**/*.mp4
+**/*.vtt
+providers.txt
+**/providers.txt
+providers**.txt
+**/providers**.txt
+
+# Scrolls ceremony cloned repos (large)
+.scrolls-ceremony/repos/
+
+# Graphify scratch output
+graphify-out/
+
+# PQC secrets — bundle and audit log (the .env patterns above cover
+# most cases, but PQC artifacts are explicit for clarity)
+secrets.bundle.json
+secrets.bundle.json.bak.*
+audit.log
+audit.log.*
+# Local pqc-sign public keys (used for verification, not for committing)
+.pqc-keys/*.priv
+.pqc-keys/*.sk
+
+# Hermes / agent plan and context directories (auto-injected by
+# subdirectory context discovery — never intended for git)
 .hermes/
 .omx/
 .omo/
 .omp/
+
+# Agent COMMS live board — in-flight coordination, never committed.
+# The dated ledger AGENTS/{date}.COMMS.md IS committed; this sidecar is not.
+AGENTS/*.COMMS.live.md
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Project-specific patterns (preserved from existing .gitignore)
+# ═══════════════════════════════════════════════════════════════════════════
+
+!.agents/skills/
+.agents/*
+.env.development.local
+.env.local
+.env.production.local
+.env.test.local
+.next/
+.pnp
+.pnp.js
+.turbo
+.vercel
+build
+coverage
+dist
+node_modules
+npm-debug.log*
+out/
+yarn-debug.log*
+yarn-error.log*
+
