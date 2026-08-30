@@ -45,7 +45,11 @@ yarn-error.log*
 # Hermes-injected copy, audit staged files before each commit and
 # verify the AGENTS.md / llms.txt content matches the repo's own
 # authoring (not the user's ~/.hermes/ templates).
-.agents/
+.agents/*
+# Repo-owned agent skills ARE tracked (.agents/skills/bbmcp — the
+# zero-wiring onboarding playbook + connect helper). Everything else
+# under .agents/ (tasks/, injected copies, etc.) stays ignored.
+!.agents/skills/
 
 # Hermes / agent plan directories (auto-injected by subdirectory
 # context discovery — never intended for git)
