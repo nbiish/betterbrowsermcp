@@ -701,6 +701,173 @@ export const SecretsRotateTool = z.object({
   arguments: z.object({}),
 });
 
+// ============================================================
+//  CDP cursor tools (Phase 4) — real OS-level pointer input
+//
+//  Pass-through verbs backed by the extension's CDP cursor
+//  primitive (docs/cursor-primitive.md). The server forwards the
+//  payload verbatim (including optional tabId); the extension
+//  resolves targeting and executes Input.dispatchMouseEvent /
+//  Input.dispatchKeyEvent.
+// ============================================================
+
+/**
+ * Shared optional targeting fragment. Resolution order at the
+ * extension: `selector` → `ref` → `xy` (absolute viewport CSS px).
+ * At least one must resolve; otherwise ELEMENT_NOT_FOUND-class
+ * errors come back pass-through.
+ */
+const CursorTarget = {
+  selector: z
+    .string()
+    .optional()
+    .describe(
+      "CSS selector scoped to the document. Preferred over ref/xy when known (text or ARIA selectors beat fragile paths).",
+    ),
+  ref: z
+    .string()
+    .optional()
+    .describe(
+      "Element reference from a fresh ARIA snapshot (e.g. 'e14' or '@e14'). Mapped to the underlying DOM node via the snapshot.",
+    ),
+  x: z
+    .number()
+    .optional()
+    .describe("Absolute viewport X coordinate in CSS pixels (origin: top-left)."),
+  y: z
+    .number()
+    .optional()
+    .describe("Absolute viewport Y coordinate in CSS pixels (origin: top-left)."),
+};
+
+export const CursorMoveTool = z.object({
+  name: z.literal("browser_cursor_move"),
+  description: z.literal(
+    "Move the mouse cursor to a target. Fires a REAL OS-level mouseMoved event via CDP — hover-reveal and tooltip UIs that ignore synthetic JS events respond correctly. Targeting resolution: selector → ref → xy (viewport coordinates). Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorHoverTool = z.object({
+  name: z.literal("browser_cursor_hover"),
+  description: z.literal(
+    "Hover the cursor at the target (element center) using REAL OS-level input — fires the mouseenter/mouseover chain CDP users get. Fixes hover-reveal UIs (masked secret keys, copy buttons, CSS dropdowns) that synthetic hover cannot trigger. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    duration_ms: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "How long to hold the hover position before returning, in ms. Some CSS-only menus need a held position (or slight movement after arrival) before revealing.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorClickTool = z.object({
+  name: z.literal("browser_cursor_click"),
+  description: z.literal(
+    "Move the cursor to the target and perform a REAL OS-level mouse click (CDP mousePressed + mouseReleased — the full mousedown/mouseup/enter/over chain). Use instead of browser_click when the page only reacts to real pointer input (hover-gated UIs, React pointer handlers). button: left (default) or right; count: 1 (default) or 2 for double-click. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    button: z
+      .enum(["left", "right"])
+      .optional()
+      .describe("Mouse button. Default left."),
+    count: z
+      .union([z.literal(1), z.literal(2)])
+      .optional()
+      .describe("Click count: 1 (default) or 2 for double-click."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorClickHoldTool = z.object({
+  name: z.literal("browser_cursor_click_hold"),
+  description: z.literal(
+    "Press and hold: move to the target, REAL mousedown, wait hold_ms (default 500), mouseup. For 'press and hold to reveal secret' UIs and drag initiation where a plain click is swallowed. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    hold_ms: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .default(500)
+      .describe(
+        "Milliseconds between mousedown and mouseup. Default 500.",
+      ),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorDragTool = z.object({
+  name: z.literal("browser_cursor_drag"),
+  description: z.literal(
+    "REAL OS-level mouse drag: mousePressed at start → mouseMoved to end (button held) → mouseReleased. Single chord, no intermediate stops. For sliders, canvas drawing, sortable lists. Each endpoint resolves independently: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    start: z
+      .object({ ...CursorTarget })
+      .describe("Drag origin. Resolution: selector → ref → xy."),
+    end: z
+      .object({ ...CursorTarget })
+      .describe("Drag destination. Resolution: selector → ref → xy."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorScrollTool = z.object({
+  name: z.literal("browser_cursor_scroll"),
+  description: z.literal(
+    "REAL mouse-wheel scroll (CDP mouseWheel) at a target element or the viewport. deltaY/deltaX in wheel units — positive scrolls down/right, 100 ≈ one notch. Scrolls inner containers (tables, panes) that window-level scrolling misses. Targeting resolution: selector → ref → xy (all optional; viewport when omitted). Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    deltaY: z
+      .number()
+      .describe(
+        "Vertical wheel delta. Positive = scroll down. 100 ≈ one notch.",
+      ),
+    deltaX: z
+      .number()
+      .optional()
+      .describe("Horizontal wheel delta. Positive = scroll right."),
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorSubmitTool = z.object({
+  name: z.literal("browser_cursor_submit"),
+  description: z.literal(
+    "Submit a form or fire Enter on the focused element (real CDP Enter keyDown/keyUp, or requestSubmit). Pass selector/ref to focus the target first; omit targeting to submit whatever is currently focused. Targeting resolution: selector → ref. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    selector: CursorTarget.selector,
+    ref: CursorTarget.ref,
+    tabId: TabIdParam,
+  }),
+});
+
+export const CursorContextMenuTool = z.object({
+  name: z.literal("browser_cursor_context_menu"),
+  description: z.literal(
+    "REAL OS-level right-click at the target (CDP mousePressed right + mouseReleased right) to open the context menu. Targeting resolution: selector → ref → xy. Subject to per-tab advisory locks (TAB_LOCKED/BUSY passthrough).",
+  ),
+  arguments: z.object({
+    ...CursorTarget,
+    tabId: TabIdParam,
+  }),
+});
+
 export const MCPTool = z.discriminatedUnion("name", [
   // Common
   NavigateTool,
@@ -753,4 +920,13 @@ export const MCPTool = z.discriminatedUnion("name", [
   SecretsLockAgentTool,
   SecretsCopyToPageTool,
   SecretsRotateTool,
+  // CDP cursor (Phase 4)
+  CursorMoveTool,
+  CursorHoverTool,
+  CursorClickTool,
+  CursorClickHoldTool,
+  CursorDragTool,
+  CursorScrollTool,
+  CursorSubmitTool,
+  CursorContextMenuTool,
 ]);
