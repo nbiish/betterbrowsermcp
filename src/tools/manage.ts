@@ -98,6 +98,22 @@ export const listTabs: Tool = {
   },
 };
 
+/**
+ * v0.9.1: LLMs habitually guess "browser_get_tab_info" for tab
+ * inspection (a natural name that doesn't exist — until now).
+ * Registering it as a first-class alias of browser_list_tabs turns a
+ * confusing "tool not found" into the result the agent wanted.
+ */
+export const getTabInfo: Tool = {
+  schema: {
+    name: "browser_get_tab_info",
+    description: ListTabsTool.shape.description.value +
+      " (Alias of browser_list_tabs — identical behavior.)",
+    inputSchema: zodToJsonSchema(ListTabsTool.shape.arguments),
+  },
+  handle: listTabs.handle,
+};
+
 export const openTab: Tool = {
   schema: {
     name: OpenTabTool.shape.name.value,

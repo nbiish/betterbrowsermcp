@@ -36,6 +36,43 @@ export async function captureAriaSnapshot(
     tabId,
   })) as any;
 
+  // v0.9.1: the extension resolves {ok:false, error} when the target
+  // tab is not bound to THIS agent (tabs are agent-scoped) or when no
+  // active tab is set. Surface that explicitly instead of formatting
+  // "undefined" into every header — a misleading snapshot costs the
+  // agent more than a clean error. The bound-tab roster (when readable)
+  // is embedded so the agent can immediately pick a valid tabId.
+  const firstError = [url, title, snapshot].find(
+    (r: any) => r && typeof r === "object" && r.ok === false,
+  ) as any;
+  if (firstError) {
+    let rosterBlock =
+      "\n\nNo tabs are bound to this agent yet — call browser_open_tab first.";
+    if (tabsResult && Array.isArray(tabsResult.tabs) && tabsResult.tabs.length > 0) {
+      const lines = tabsResult.tabs.map(
+        (t: any) => `  - tabId=${t.tabId}  label="${t.label}"  url=${t.url}`,
+      );
+      rosterBlock = `\n\nTabs you CAN act on:\n${lines.join("\n")}`;
+    }
+    const why =
+      tabId !== undefined
+        ? " Tab IDs are agent-scoped — that tab may belong to another agent."
+        : "";
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text:
+            `${status ? `${status}\n` : ""}Snapshot failed: ${
+              firstError.error || "target tab is not bound to this agent"
+            }.${why}${rosterBlock}\n\n` +
+            `Tip: pass an explicit tabId from the list above on every call when driving multiple tabs.`,
+        },
+      ],
+    };
+  }
+
   // The extension returns a list of bound tabs. We embed a
   // compact summary in the snapshot text so the LLM always knows
   // what's available without a separate tool call.
@@ -57,17 +94,24 @@ export async function captureAriaSnapshot(
     ? `- Recent tab events (${eventLines.length} drained):\n${eventLines.map((l) => `  ${l}`).join("\n")}\n`
     : "";
 
+  // Null-safe header values: a missing URL/title renders as
+  // "(unknown)", never a literal "undefined".
+  const urlText = (typeof url === "object" ? url?.url : url) ?? "(unknown)";
+  const titleText =
+    (typeof title === "object" ? title?.title : title) || "(untitled)";
+  const snapshotText =
+    typeof snapshot === "object" ? snapshot?.snapshot : snapshot;
   return {
     content: [
       {
         type: "text",
         text: `${status ? `${status}\n` : ""}
-- Page URL: ${typeof url === "object" ? url.url : url}
-- Page Title: ${typeof title === "object" ? title.title : title}
+- Page URL: ${urlText}
+- Page Title: ${titleText}
 ${tabsBlock}${eventsBlock}
 - Page Snapshot
 \`\`\`yaml
-${typeof snapshot === "object" ? snapshot.snapshot : snapshot}
+${snapshotText ?? "(snapshot unavailable)"}
 \`\`\`
 `,
       },

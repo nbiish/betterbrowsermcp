@@ -30,6 +30,7 @@ const customTools: Tool[] = [custom.getConsoleLogs, custom.screenshot];
 // readiness waiting, and event polling.
 const manageTools: Tool[] = [
   manage.listTabs,
+  manage.getTabInfo, // v0.9.1 alias of browser_list_tabs
   manage.openTab,
   manage.closeTab,
   manage.renameTab,
