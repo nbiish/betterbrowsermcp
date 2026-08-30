@@ -42,6 +42,17 @@ import packageJSON from "../package.json";
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Hard wall-clock deadline for one MCP-over-HTTP exchange. Tool calls
+ * already time out at 30s against the extension, but any other stall
+ * (SDK internals, socket weirdness) must NOT leave the HTTP response
+ * open forever — clients that await the response would hang
+ * indefinitely (v0.9.0 field report: concurrent two-agent run wedged
+ * a client shell). Every response is guaranteed to reach a terminal
+ * state within this window.
+ */
+const MCP_HTTP_DEADLINE_MS = 45_000;
+
 function json(res: ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(payload));
@@ -177,15 +188,40 @@ export async function handleMcpHttpRequest(
 
   try {
     await server.connect(transport);
-    await transport.handleRequest(req, res, parsed);
+    const handled = transport.handleRequest(req, res, parsed);
+    // Swallow only when the deadline already won — otherwise the race
+    // below surfaces real errors and this shadow would hide them.
+    handled.catch(() => {});
+    const deadline = new Promise<never>((_, reject) => {
+      const t = setTimeout(
+        () => reject(new Error(`deadline`)),
+        MCP_HTTP_DEADLINE_MS,
+      );
+      // Never keep the process alive just for the timer.
+      t.unref?.();
+    });
+    await Promise.race([handled, deadline]);
   } catch (e: any) {
+    const timedOut = e?.message === "deadline";
     if (!res.headersSent) {
-      json(res, 400, {
-        error: `MCP request failed: ${e?.message || String(e)}`,
-      });
+      json(res, timedOut ? 504 : 400, timedOut
+        ? {
+            error: `MCP request exceeded ${MCP_HTTP_DEADLINE_MS}ms deadline.`,
+          }
+        : { error: `MCP request failed: ${e?.message || String(e)}` });
     } else {
+      // Terminal-state guarantee: a started-but-stalled response
+      // (e.g. half-open SSE stream) is destroyed so the client's
+      // socket always settles.
       try {
-        res.end();
+        res.destroy();
+      } catch {
+        // ignore
+      }
+    }
+    if (timedOut) {
+      try {
+        await transport.close();
       } catch {
         // ignore
       }
