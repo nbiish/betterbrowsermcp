@@ -18,16 +18,18 @@ isolated context, its own tabs, and its own MCP endpoint. You never touch
 another agent's tabs, and the user never touches yours — unless they
 explicitly bind a tab to you in the extension popup (explicit consent).
 
-## Quickstart (no user settings changes needed)
+## Quickstart (zero config, zero user steps)
 
 ```bash
-# 1. Ensure the hub is running (starts it if down, verifies your endpoint,
-#    prints ready-to-paste MCP config for your harness):
-node <path-to-betterbrowsermcp>/scripts/bbmcp-connect.mjs --agent my-agent --port 9223
+# 1. Attach — ALL arguments optional. Discovers/reuses the hub on ports
+#    9223-9237 (or starts one on a free port), claims your agentId
+#    (--agent, $BBMCP_AGENT_ID, or auto-generated), verifies your
+#    endpoint, and prints ready-to-paste MCP config:
+node <path-to-betterbrowsermcp>/scripts/bbmcp-connect.mjs --agent my-agent
 
-# 2. Ask the user to do the ONE manual step (consent gate):
-#    Chrome → Better Browser MCP extension icon → "Add agent"
-#    → id: my-agent, port: 9223 → card must show "connected".
+# 2. NOTHING for the user to do. The extension auto-attaches to every
+#    registered agent within ~30s. Only bind-their-tab remains a user
+#    action — that consent gate is by design.
 
 # 3. Wire your harness with the printed JSON (see "Harness wiring" below),
 #    then call tools: browser_open_tab is your first tab.
@@ -45,7 +47,9 @@ node <path-to-betterbrowsermcp>/scripts/bbmcp-connect.mjs --agent my-agent --por
   9109 on first install — use 9109 to match.
 - Build from source first if `dist/` is missing: `npm run build`.
 - **Port collisions hard-fail** (never silently kills the other process).
-  Pick a free port; never kill another agent's instance.
+  Never kill another agent's instance. The connect script avoids the
+  problem entirely: it reuses an existing hub in 9223-9237 or starts on
+  the first free port there — you never need to pick a port.
 - Loopback binds need no auth. Non-loopback (`BROWSER_MCP_BIND=0.0.0.0`)
   REQUIRES `BROWSER_MCP_AUTH_TOKEN` — both transports fail closed without it.
 
@@ -54,9 +58,10 @@ node <path-to-betterbrowsermcp>/scripts/bbmcp-connect.mjs --agent my-agent --por
 - Pick ONE stable agentId per agent: kebab-case, descriptive — e.g.
   `warp-oz`, `claude-research`, `codex-e2e`. It routes everything (WS, MCP,
   tab bindings, events), so do not change it mid-task.
-- Your endpoints:
-  - MCP: `http://localhost:9223/mcp/<agentId>` (Streamable HTTP)
-  - Extension WS (user configures): `ws://localhost:9223/ws/<agentId>`
+- Your endpoints (port = whatever the connect script resolved — read its
+  output instead of assuming 9223):
+  - MCP: `http://localhost:<port>/mcp/<agentId>` (Streamable HTTP)
+  - Extension WS (auto-attached by the extension): `ws://localhost:<port>/ws/<agentId>`
 
 ## 3. The tab contract (CRITICAL — read before any tool call)
 
@@ -163,8 +168,10 @@ Echo the `Mcp-Session-Id` response header on subsequent requests. Call
 
 ## 8. Troubleshooting
 
-- `noConnectedExtension` — the user has not added your endpoint in the popup
-  yet. Ask them: extension icon → Add agent → your id + port.
+- `noConnectedExtension` — the extension auto-attaches within ~30s of your
+  `initialize`. Still red after a minute? Have the user reload the
+  extension (chrome://extensions → reload icon). Manual fallback:
+  extension icon → Add agent → your id + the port from connect output.
 - Port already in use → the hub hard-fails with a clear message. Choose
   another port; do NOT kill the existing process.
 - WS closes with `4401` → auth token mismatch (server has
