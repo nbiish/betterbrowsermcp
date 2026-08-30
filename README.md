@@ -27,6 +27,10 @@
 
 All `browser_navigate`, `browser_click`, `browser_snapshot`, etc. tool names are identical to upstream — no client changes needed on the LLM side.
 
+> **Agent self-service:** agents can onboard themselves with zero MCP
+> settings changes — see [`.agents/skills/bbmcp/SKILL.md`](.agents/skills/bbmcp/SKILL.md)
+> and run `node scripts/bbmcp-connect.mjs --agent <id> --port 9223`.
+
 ---
 
 ## Quick start
