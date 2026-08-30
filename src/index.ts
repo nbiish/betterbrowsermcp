@@ -60,7 +60,22 @@ function setupExitWatchdog(server: Server): void {
 }
 
 async function runHubMode(): Promise<void> {
-  const { httpServer } = await createWebSocketServer();
+  const { httpServer, extraHttpServers, boundAddresses } = await createWebSocketServer();
+
+  // Daemon posture: availability first (llms.txt design directive).
+  // A stray rejection/exception must never silently kill the hub —
+  // log loudly and keep serving. (Node's default exits the process
+  // on unhandledRejection with no recovery path.)
+  process.on("unhandledRejection", (reason) => {
+    process.stderr.write(
+      `[betterbrowsermcp] unhandledRejection (hub stays up): ${String(reason)}\n`,
+    );
+  });
+  process.on("uncaughtException", (err) => {
+    process.stderr.write(
+      `[betterbrowsermcp] uncaughtException (hub stays up): ${err?.stack || err}\n`,
+    );
+  });
 
   process.stderr.write(
     `[betterbrowsermcp] ${appConfig.name} v${packageJSON.version}\n` +
@@ -73,6 +88,7 @@ async function runHubMode(): Promise<void> {
   );
 
   const shutdown = () => {
+    for (const extra of extraHttpServers) extra.close();
     httpServer.close(() => process.exit(0));
     // Force-exit if connections linger.
     setTimeout(() => process.exit(0), 3000).unref();
