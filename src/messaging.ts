@@ -103,7 +103,45 @@ export type SocketMessageMap = {
   // window scope via the content script; the page listens for the
   // `bbmcp:secrets-loaded` CustomEvent.
   browser_secrets_load: RequestPayload;
+  // browser_secrets_add_from_clipboard (v0.9.0+) — the extension's
+  // content script reads navigator.clipboard.readText() and returns the
+  // value; the server packs it into the PQC bundle.
+  browser_secrets_add_from_clipboard: RequestPayload;
+  // Tab adoption / locks / readiness (v0.9.0+ frozen WS contract)
+  browser_bind_tab: RequestPayload;
+  browser_unbind_tab: RequestPayload;
+  browser_acquire_tab: RequestPayload;
+  browser_release_tab: RequestPayload;
+  browser_wait_for_content: RequestPayload;
 };
+
+/**
+ * Unsolicited push frame sent by the extension (no id):
+ *   { type: "event", event: "tab_removed"|"tab_updated"|"binding_changed",
+ *     payload: { tabId, agentId?, url?, title? } }
+ *
+ * The server buffers these per agent and never chokes on unknown event
+ * names or unknown frame types.
+ */
+export type ExtensionEventFrame = {
+  type: "event";
+  event: string;
+  payload?: Record<string, unknown>;
+};
+
+/**
+ * Narrow a parsed incoming frame to an extension push event. Returns
+ * null for anything else (messageResponse, auth, unknown types — all
+ * of which are handled elsewhere or ignored).
+ */
+export function isEventFrame(msg: unknown): msg is ExtensionEventFrame {
+  return (
+    !!msg &&
+    typeof msg === "object" &&
+    (msg as any).type === "event" &&
+    typeof (msg as any).event === "string"
+  );
+}
 
 /**
  * Extract the payload type for a given message type.

@@ -32,9 +32,17 @@ type Options = {
   context: Context;
 };
 
-export async function createServerWithTools(
-  options: Options,
-): Promise<Server> {
+/**
+ * Register the tool/resource request handlers on an MCP Server
+ * instance, dispatching every tool call against `context`.
+ *
+ * Exported so the Streamable HTTP transport (src/http.ts) can build
+ * per-agent, per-request MCP servers with identical tool semantics.
+ * Note: this does NOT patch server.close — callers decide whether a
+ * close should also tear down the underlying Context (stdio does,
+ * stateless HTTP requests must not).
+ */
+export function registerToolHandlers(options: Options): Server {
   const { name, version, tools, resources, context } = options;
 
   const server = new Server(
@@ -91,6 +99,18 @@ export async function createServerWithTools(
     return { contents };
   });
 
+  void appConfig;
+
+  return server;
+}
+
+export async function createServerWithTools(
+  options: Options,
+): Promise<Server> {
+  const { context } = options;
+
+  const server = registerToolHandlers(options);
+
   // The patched `server.close` chains: original close -> context close.
   // The original (inherited) close shuts down the MCP transport. We
   // capture the parent implementation explicitly to avoid the
@@ -100,8 +120,6 @@ export async function createServerWithTools(
     await originalClose();
     await context.close();
   };
-
-  void appConfig;
 
   return server;
 }
