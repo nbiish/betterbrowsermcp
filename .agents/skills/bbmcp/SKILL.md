@@ -83,6 +83,19 @@ node <path-to-betterbrowsermcp>/scripts/bbmcp-connect.mjs --agent my-agent
 
 ## 4. Tool playbook
 
+**Tool discovery discipline (prevents most agent failures):**
+
+- NEVER invent tool names or argument names. Call `tools/list` first —
+  it is authoritative (49 tools + the `browser_get_tab_info` alias of
+  `browser_list_tabs`) and includes every argument's description.
+- `browser_extract_text` takes `{ref}` from a FRESH `browser_snapshot`
+  (refs remap every snapshot). It has no `selector` argument — for CSS
+  selectors use `browser_evaluate`.
+- Tab IDs are agent-scoped. Acting on another agent's tabId fails
+  EXPLICITLY with `isError` text (v0.9.1+) — read the roster in the
+  error, pick one of YOUR tabIds, and continue. Never treat a failed
+  call as success.
+
 ```text
 discover    browser_list_tabs            (labels + active tabId)
 workspace   browser_open_tab {url?}      browser_close_tab
@@ -98,7 +111,8 @@ act         browser_click {element, ref} browser_hover {element, ref}
             browser_press_key {key}      browser_scroll? → browser_cursor_scroll
 react-form  browser_set_input_value / browser_clear_input   (React-controlled inputs)
             browser_paste_text                              (SPA paste events)
-extract     browser_extract_text {selector?}  browser_get_attribute {selector, attribute}
+extract     browser_extract_text {ref}       (ref from fresh snapshot)
+            browser_get_attribute {ref, attribute}
             browser_evaluate {js}             (last resort; page JS context)
 capture     browser_copy_to_clipboard    ("click to copy" values: API keys, PATs)
 parallel    browser_acquire_tab / browser_release_tab / browser_poll_events

@@ -235,8 +235,9 @@ export const extractText: Tool = {
           {
             type: "text",
             text:
-              `Failed to extract text from "${validated.element}" (ref=${validated.ref}): ${result?.error || "unknown error"}\n\n` +
-              `The ref may be stale. Run \`browser_snapshot\` to get fresh refs.`,
+              `Failed to extract text from "${validated.element ?? "element"}" (ref=${validated.ref}): ${result?.error || "unknown error"}\n\n` +
+              `The ref may be stale (refs remap on every snapshot — run \`browser_snapshot\` again for fresh refs), ` +
+              `or the tab is not bound to you (run \`browser_list_tabs\`).`,
           },
         ],
         isError: true,
@@ -249,7 +250,7 @@ export const extractText: Tool = {
         {
           type: "text",
           text:
-            `Text from "${validated.element}" (ref=${validated.ref}, tabId=${result.tabId ?? "n/a"}):\n\n` +
+            `Text from "${validated.element ?? "element"}" (ref=${validated.ref}, tabId=${result.tabId ?? "n/a"}):\n\n` +
             `\`\`\`\n${text}\n\`\`\``,
         },
       ],

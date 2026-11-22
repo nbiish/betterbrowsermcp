@@ -1,5 +1,5 @@
 ---
-description: PQC secrets for all API keys. Worktree per task — branch from main, merge back to main after verification, then clean up. Polyglot (Rust, TS, Py, etc). Chain-of-Draft: ≤5 words per step, output after ####. llms.txt is the PRD anchor — read it. No secrets in tasks or PRD. FIPS 203/204/205 for secrets ops; standard crypto for transport. Audit for banned algorithms and secrets every cycle. Never work directly on main. Branch naming `<type>/<scope>-<slug>`. Ask before merging. Output full production code. Concurrent agents coordinate via AGENTS/{date}.COMMS.md.
+description: PQC secrets for all API keys. Worktree per task — branch from main, merge back to main after verification, then clean up. Polyglot (Rust, TS, Py, etc). Chain-of-Draft: ≤5 words per step, output after ####. llms.txt is the PRD anchor — read it. No secrets in tasks or PRD. FIPS 203/204/205 for secrets ops; standard crypto for transport. Audit for banned algorithms and secrets every cycle. Never work directly on main. Branch naming `<type>/<scope>-<slug>`. Ask before merging. Output full production code. Concurrent agents coordinate via AGENTS/{date}.COMMS.md. Cross-machine reporting goes through the wtf hub (mandatory; chain-of-draft; see .agents/skills/wtf-agent-hub/SKILL.md).
 ---
 
 # 🚧 WORKTREE GATE — MANDATORY CHECKPOINT
@@ -43,7 +43,8 @@ Conflict → fail closed, explain, ask.
 <TASK_PRIMER>
 ## TASK COORDINATION & CHAIN-OF-DRAFT
 
-- **Task File:** Every task writes `.agents/tasks/TASK.$(date).md` in its worktree. Chain-of-Draft: **≤5 words** per reasoning step — pure logic/state transformations, zero preamble. Terminate drafting and output deliverables after a `####` separator. Read → Execute → Write. No secrets or keys.
+- **Context Review (every task):** at start, read the current day's `AGENTS/{date}.COMMS.md`, recent `.agents/tasks/TASK.*.md`, and the applicable `llms.txt` DOX chain — nearest first, then parents. They are binding context, not optional reading: the ledger holds in-flight/merged work you must not collide with; task files hold prior decisions and conventions; `llms.txt` holds the work contract.
+- **Fast orientation (`git context`):** one command dumps everything above — latest COMMS entries + newest status, task-file gists (`.agents/tasks/`), `llms.txt` PRD version, worktrees, stashes, timeline. Run it first in any repo; read the full files it points at when deeper history is needed.
 - **PRD Anchor:** `llms.txt` is the authoritative PRD. Read unconditionally if present; overrides conflicting sources per P2. If task drifts, re-read. Never skip.
 - **Artifact Hygiene:** Task files and PRD inherit all security rules. Audit per cycle. Default classification: Confidential.
 </TASK_PRIMER>
@@ -60,7 +61,51 @@ When ≥1 agent or subagent works at once (multiple branches, features, updates,
 - **Bracket every input and output with `start:` / `end:` ISO-8601 timestamps** — one block per input→output unit, never a published `start:` without its `end:`. Stamp `start:` when work begins (input received), `end:` when the output is complete. Abandoned actions still close with `end:` + `status: abandoned`.
 - **Carve-out:** appending to the main repo's `AGENTS/{date}.COMMS.md` working file by absolute path is the *only* permitted edit outside a worktree — it is a live board, never a `git commit` on `main`. Commits land via task branches and merge to `main`.
 - Full entry format, lifecycle events, and merge-conflict rules: see the protocol spec at the top of `AGENTS/{date}.COMMS.md`.
+- Scroll deploy lifecycle events (`intent-deploy` / `deployed` / `deploy-failed`, with manifest digest) are appended by the integrity layer in `src/scroll_integrity.sh` (`scrolls_comms_log`).
 </COMMS>
+
+---
+
+<AGENT_HUB>
+## WTF HUB — CROSS-MACHINE REPORTING (MANDATORY)
+
+The COMMS ledger above coordinates agents **inside this repo**. The **wtf
+observability hub** is the cross-machine layer of the same protocol: every
+agent on every machine/harness reports through it so the operator can see,
+at a glance, what the fuck is going on everywhere. Both layers share one
+wire format: **chain-of-draft** — terse fragments, ≤5 words each, no prose,
+no secrets.
+
+**Setup (once per machine):**
+1. Read `.agents/skills/wtf-agent-hub/SKILL.md` (install it anywhere with
+   `wtf skill install --dir <project>`; the skill ships inside the `wtf`
+   binary from the `wtf-is-going-on-mcp` repo).
+2. Credentials ride the PQC lane: pack `WTF_HUB_URL` / `WTF_DEVICE_NAME` /
+   `WTF_DEVICE_KEY` into the bundle, `eval "$(pqc-secrets export | grep
+   '^export WTF_')"` at session start — or `wtf setup` to write
+   `bridge.json` (0600).
+3. Register the bridge with the MCP harness:
+   `{ "command": "<abs>/wtf", "args": ["agent"] }`.
+
+**Reporting contract (mirrors COMMS, cross-machine):**
+- `check_in` working/blocked/done at task boundaries; `log_event` for
+  milestones and failures; `wtf_is_going_on` before starting work — another
+  agent, on another machine, may already be on the task.
+- Bins are the cross-machine handoff surface (the cross-repo counterpart of
+  this repo's `.agents/tasks/` + COMMS ledger): `read_bin` when told "work
+  from bin N"; `write_bin` publishes findings/context for agents on other
+  machines — read the bin first (last writer wins), then `log_event` a
+  pointer (`findings in bin 2; done`). No secrets in bins or events.
+- `hub_info` answers where the hub is; the dashboard link never travels
+  over MCP (operator runs `wtf dashboard-url` on the hub machine).
+- **Private agent-to-agent channels:** `session_create` / `session_join` /
+  `session_seal` / `session_send` / `session_read` — dedicated encrypted
+  chats where the hub relays ciphertext only (ML-KEM-768 sealed session
+  keys, FIPS 203; it cannot read messages). Flow: skill §6.
+- Division of labor: COMMS ledger = repo-local, git-tracked, per-day
+  history. wtf hub = live, cross-machine, operator-facing. Use both; never
+  let the hub replace the ledger's merge-coordination role.
+</AGENT_HUB>
 
 ---
 
@@ -218,10 +263,15 @@ git branch --show-current  # main
 | AES-256-GCM | SP 800-38D | Symmetric encryption | Standard | Payload at rest |
 | Argon2id | OWASP 2025 | Password hashing | Standard | Key derivation |
 
-**Commands:**
-- `pqc-secrets keygen` — ML-KEM-768 keypair. Private → OS keystore; public → `~/.config/pqc-secrets/recipient.pub`.
-- `pqc-secrets pack` — AES-256-GCM encrypt stdin `KEY=VAL`, wrap data key via ML-KEM-768, write `secrets.bundle.json`.
-- `pqc-secrets export` — decrypt bundle, output `export KEY=VALUE` lines.
+**Commands** (`bin/pqc-secrets <cmd>`; on darwin/arm64 `keygen|pack|export|issue|envelope|vault` run the Rust v1.2.0 fast-path, everything else runs the canonical Python engine via `uv`; when a vault exists, `export`/`issue`/`envelope` are vault-first on every platform):
+- `vault` — passphrase-wrapped identity vault at `~/.config/pqc-secrets/vault.pqc` (0600): `init|unlock|lock|status|export-identity|sign|verify|audit-verify|migrate`. Canonical identity root when present; keychain untouched on vault paths (`--use-keychain` = explicit legacy escape hatch).
+- `keygen` — ML-KEM-768 keypair. Private → OS keystore; public → `~/.config/pqc-secrets/recipient.pub`. Refuses when a vault exists (vault is the identity root).
+- `gen` — high-entropy secret from the OS CSPRNG to stdout (`--bits`, `--words`, `--format`, `--env NAME`, `--count`). Metadata to stderr, value never logged.
+- `pack` — AES-256-GCM encrypt stdin `KEY=VAL`, wrap data key via ML-KEM-768, write `secrets.bundle.json`.
+- `export` — decrypt bundle, output `export KEY=VALUE` lines. Vault-first: decapsulates via the vault seed.
+- `issue` — mint + seal a device key (`issue wtf <name>`), vault-first: in-memory merge into the existing bundle (collision guard, `--force` to override), atomic 0600 write, ML-DSA-65 sidecar signature, signed audit record.
+- `envelope` — signed cross-machine transfer (`envelope export|import`), vault-first: signs with the vault ML-DSA-65 identity, opens via the vault seed, verify-before-decapsulate fail-closed.
+- `verify` / `list` / `rename` / `migrate` — inspect and maintain the bundle; names only, values never displayed. Tamper evidence: `vault verify <bundle>` + `vault audit-verify` expose fingerprints/digests only — the agent-review surface.
 - `secrets-load` — shell function evaluating `pqc-secrets export` into current shell memory.
 </REFERENCE>
 
