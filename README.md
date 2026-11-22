@@ -41,6 +41,27 @@ All `browser_navigate`, `browser_click`, `browser_snapshot`, etc. tool names are
 npx @nbiish/betterbrowsermcp@latest
 # or, from this checkout:
 
+<div align="center">
+  <hr width="50%">
+  <h3>Support This Project</h3>
+  <table style="border: none; border-collapse: collapse;">
+    <tr style="border: none;">
+      <td style="border: none; vertical-align: middle; padding: 20px;">
+        <h4>Stripe</h4>
+        <img src="qr-stripe-donation.png" alt="Scan to donate" width="180"/>
+        <p><a href="https://raw.githubusercontent.com/nbiish/license-for-all-works/8e9b73b269add9161dc04bbdd79f818c40fca14e/qr-stripe-donation.png">Donate via Stripe</a></p>
+      </td>
+      <td style="border: none; vertical-align: middle; padding: 20px;">
+        <a href="https://www.buymeacoffee.com/nbiish">
+          <img src="buy-me-a-coffee.svg" alt="Buy me a coffee" />
+        </a>
+      </td>
+    </tr>
+  </table>
+  <hr width="50%">
+</div>
+
+
 ## Community Licensing
 
 This project is part of the Rights Holder's works governed by the license framework in
@@ -278,3 +299,21 @@ src/
 Better Browser MCP is a fork of [browsermcp/mcp](https://github.com/browsermcp/mcp) with the multi-agent fixes needed for the [Hermes](https://hermes-agent.nousresearch.com/) + [OMP](https://github.com/can1357/oh-my-pi) + Codex multi-agent workflow. Originally adapted from Microsoft's Playwright MCP server.
 
 By [Nbiish](https://github.com/nbiish) — first repo, but probably not the last.
+
+## Citation
+
+```bibtex
+@misc{betterbrowsermcp2026,
+  author/creator/steward = {ᓂᐲᔥ ᐙᐸᓂᒥᑮ-ᑭᓇᐙᐸᑭᓯ (Nbiish Waabanimikii-Kinawaabakizi), also known legally as JUSTIN PAUL KENWABIKISE, professionally documented as Nbiish-Justin Paul Kenwabikise, Anishinaabek Dodem (Anishinaabe Clan): Animikii (Thunder), descendant of Chief ᑭᓇᐙᐸᑭᓯ (Kinwaabakizi) of the Beaver Island Band and enrolled member of the sovereign Grand Traverse Band of Ottawa and Chippewa Indians},
+  title/description = {betterbrowsermcp},
+  type_of_work = {Indigenous digital creation/software incorporating traditional knowledge and cultural expressions},
+  year = {2026},
+  publisher/source/event = {GitHub repository under tribal sovereignty protections},
+  howpublished = {\url{https://github.com/nbiish/betterbrowsermcp}},
+  note = {Authored and stewarded by ᓂᐲᔥ ᐙᐸᓂᒥᑮ-ᑭᓇᐙᐸᑭᓯ (Nbiish Waabanimikii-Kinawaabakizi), also known legally as JUSTIN PAUL KENWABIKISE, professionally documented as Nbiish-Justin Paul Kenwabikise, Anishinaabek Dodem (Anishinaabe Clan): Animikii (Thunder), descendant of Chief ᑭᓇᐙᐸᑭᓯ (Kinwaabakizi) of the Beaver Island Band and enrolled member of the sovereign Grand Traverse Band of Ottawa and Chippewa Indians. This work embodies Indigenous intellectual property, traditional knowledge systems (TK), traditional cultural expressions (TCEs), and associated data protected under tribal law, federal Indian law, treaty rights, Indigenous Data Sovereignty principles, and international indigenous rights frameworks including UNDRIP. All usage, benefit-sharing, and data governance are governed by the COMPREHENSIVE RESTRICTED USE LICENSE FOR INDIGENOUS CREATIONS WITH TRIBAL SOVEREIGNTY, DATA SOVEREIGNTY, AND WEALTH RECLAMATION PROTECTIONS.}
+}
+```
+
+---
+
+Copyright © 2026 ᓂᐲᔥ ᐙᐸᓂᒥᑮ-ᑭᓇᐙᐸᑭᓯ (Nbiish Waabanimikii-Kinawaabakizi). This work embodies Traditional Knowledge and Traditional Cultural Expressions. All rights reserved.
