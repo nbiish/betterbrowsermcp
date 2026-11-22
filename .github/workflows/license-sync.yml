@@ -1,0 +1,61 @@
+name: license-sync
+# Canonical license-content sync (critical.md § 7). Deployed to every repository
+# of the Rights Holder that carries critical.md. On every PR merged to main, and
+# weekly, fetches the canonical license content from nbiish/license-for-all-works
+# and opens an integration PR when it drifts. Uses only this repository's
+# GITHUB_TOKEN — no cross-repo secrets required.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch canonical license content
+        run: |
+          base="https://raw.githubusercontent.com/nbiish/license-for-all-works/refs/heads/main"
+          mkdir -p /tmp/canonical
+          for f in critical.md LICENSE-OPEN-FAIR-SHARE.md CONTRIBUTING-OPEN.md; do
+            curl -fsSL "$base/$f" -o "/tmp/canonical/$f"
+          done
+
+      - name: Detect drift
+        id: drift
+        run: |
+          changed=""
+          for f in critical.md LICENSE-OPEN-FAIR-SHARE.md CONTRIBUTING-OPEN.md; do
+            if ! cmp -s "/tmp/canonical/$f" "$f"; then
+              changed="$changed $f"
+            fi
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "Drifted files:$changed"
+
+      - name: Open integration PR
+        if: steps.drift.outputs.changed != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "license-sync[bot]"
+          git config user.email "license-sync[bot]@users.noreply.github.com"
+          branch="license-sync/$(date -u +%Y%m%d-%H%M%S)"
+          git checkout -b "$branch"
+          for f in ${{ steps.drift.outputs.changed }}; do
+            cp "/tmp/canonical/$f" "$f"
+          done
+          git add critical.md LICENSE-OPEN-FAIR-SHARE.md CONTRIBUTING-OPEN.md
+          git commit -m "chore(license): integrate latest canonical license content"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore(license): integrate latest canonical license content" \
+            --body "Automated license-content sync from \`nbiish/license-for-all-works\` (trigger: ${{ github.event_name }}). Files integrated:${{ steps.drift.outputs.changed }}. Merge this PR to complete integration (critical.md § 7.1)."

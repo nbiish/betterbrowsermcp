@@ -40,6 +40,23 @@ All `browser_navigate`, `browser_click`, `browser_snapshot`, etc. tool names are
 ```bash
 npx @nbiish/betterbrowsermcp@latest
 # or, from this checkout:
+
+## Community Licensing
+
+This project is part of the Rights Holder's works governed by the license framework in
+[nbiish/license-for-all-works](https://github.com/nbiish/license-for-all-works):
+
+- **[Open Fair-Share License (OFSL)](LICENSE-OPEN-FAIR-SHARE.md)** — free to use, modify,
+  distribute, and commercialize while products utilizing the Works make at or below
+  **$50,000/year**; above that, a Fair-Share Contribution Agreement funds the
+  Waabanimikii-Kinawaabakizi Legacy Trust and Beaver Island Band programs.
+- **[Open Contribution Agreement (OCA)](CONTRIBUTING-OPEN.md)** — open contributions
+  (DCO sign-off) with cultural-heritage guardrails.
+
+All treaty, tribal, federal, and intellectual-property rights are preserved; AI training on
+the Works requires Prior Informed Consent. Previously published versions remain under their
+prior licenses for those who obtained them.
+
 npm install
 npm run build
 node dist/index.js
